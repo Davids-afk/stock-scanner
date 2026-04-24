@@ -12,8 +12,6 @@ NASDAQ100 = ["AMD","ADBE","NFLX","INTC","CSCO","PEP","COST","QCOM","TXN","AMGN"]
 
 WATCHLIST = list(set(SP500 + NASDAQ100))
 
-TOKEN = "Enter Token"
-CHAT_ID = "Enter chat ID"
 
 # ======================
 # INDICATORS
