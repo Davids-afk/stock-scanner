@@ -3,261 +3,248 @@ import numpy as np
 import requests
 import os
 import pandas as pd
-import matplotlib.pyplot as plt
+import mplfinance as mpf
+from datetime import datetime
+import csv
+import os.path
 
 # ======================
-# LOAD SYMBOLS
+# LEARNING STORAGE
+# ======================
+
+LEARNING_FILE = "learning.csv"
+
+if not os.path.exists(LEARNING_FILE):
+    with open(LEARNING_FILE, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["date","ticker","prob","buy","future_return"])
+
+# ======================
+# UNIVERSE
 # ======================
 
 def load_sp500():
     try:
-        table = pd.read_html(
-            "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        )[0]
-
-        symbols = table["Symbol"].tolist()
-        symbols = [s.replace(".", "-") for s in symbols]
-
-        return symbols
-
+        t = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]
+        return [x.replace(".", "-") for x in t["Symbol"].tolist()]
     except:
         return ["AAPL","MSFT","NVDA","AMZN","GOOGL"]
 
 def load_nasdaq100():
     try:
-        tables = pd.read_html(
-            "https://en.wikipedia.org/wiki/Nasdaq-100"
-        )
-
+        tables = pd.read_html("https://en.wikipedia.org/wiki/Nasdaq-100")
         for t in tables:
             if "Ticker" in t.columns:
-                symbols = t["Ticker"].tolist()
-                symbols = [s.replace(".", "-") for s in symbols]
-                return symbols
-
+                return [x.replace(".", "-") for x in t["Ticker"].tolist()]
     except:
         return ["AMD","ADBE","NFLX"]
 
-SP500 = load_sp500()
-NASDAQ100 = load_nasdaq100()
+WATCHLIST = list(set(load_sp500() + load_nasdaq100()))
 
-WATCHLIST = list(set(SP500 + NASDAQ100))
-
-print("TOTAL SYMBOLS:", len(WATCHLIST))
+print("TOTAL:", len(WATCHLIST))
 
 # ======================
 # RSI
 # ======================
 
 def rsi(series, period=14):
-
     delta = series.diff()
-
     gain = delta.clip(lower=0).rolling(period).mean()
     loss = (-delta.clip(upper=0)).rolling(period).mean()
-
     rs = gain / loss
-
     return 100 - (100 / (1 + rs))
 
 # ======================
-# WEEKLY MA50
+# LEARNING BOOST (simple model)
 # ======================
 
-def weekly_ma50(df):
+def learning_boost(ticker):
 
-    weekly = df.resample("W").last()
+    if not os.path.exists(LEARNING_FILE):
+        return 0
 
-    weekly["MA50W"] = weekly["Close"].rolling(50).mean()
+    df = pd.read_csv(LEARNING_FILE)
 
-    last = weekly.iloc[-1]
+    recent = df[df["ticker"] == ticker].tail(20)
 
-    if np.isnan(last["MA50W"]):
-        return False, 999
+    if len(recent) < 5:
+        return 0
 
-    price = last["Close"]
-    ma50w = last["MA50W"]
+    win_rate = (recent["future_return"] > 0).mean()
 
-    distance = abs(price - ma50w) / ma50w * 100
-
-    return price > ma50w, distance
+    return (win_rate - 0.5) * 20  # -10 to +10 boost
 
 # ======================
-# ANALYSIS
+# ANALYSIS ENGINE
 # ======================
 
-def analyze(df):
+def analyze(df, ticker):
 
-    df["MA20"] = df["Close"].rolling(20).mean()
     df["MA50"] = df["Close"].rolling(50).mean()
-
+    df["MA20"] = df["Close"].rolling(20).mean()
     df["RSI"] = rsi(df["Close"])
-    df["VOL_AVG"] = df["Volume"].rolling(20).mean()
 
     last = df.iloc[-1]
 
-    if np.isnan(last["MA20"]) or np.isnan(last["MA50"]):
+    if np.isnan(last["MA50"]) or np.isnan(last["MA20"]):
         return None
-
-    above_ma50w, dist_ma50w = weekly_ma50(df)
 
     trend_up = last["Close"] > last["MA50"]
 
-    high_20 = df["High"].rolling(20).max().iloc[-2]
+    high20 = df["High"].rolling(20).max().iloc[-2]
 
-    early_breakout = last["Close"] > high_20 * 0.97
+    breakout = last["Close"] > high20
 
-    vol_ok = last["Volume"] > last["VOL_AVG"] * 0.8
+    vol_avg = df["Volume"].rolling(20).mean().iloc[-1]
+    vol_spike = last["Volume"] > vol_avg * 1.5
 
-    rsi_ok = 40 <= last["RSI"] <= 75
+    rsi_ok = 40 <= last["RSI"] <= 70
 
-    near_ma50w = dist_ma50w < 10
+    range20 = df["High"].rolling(20).max().iloc[-1] - df["Low"].rolling(20).min().iloc[-1]
+    compression = (range20 / last["Close"]) < 0.12
 
-    score = 0
+    weekly = df.resample("W").last()
+    ma50w = weekly["Close"].rolling(50).mean().iloc[-1]
+    above_ma50w = last["Close"] > ma50w if not np.isnan(ma50w) else True
 
-    score += 25 if trend_up else 0
-    score += 25 if early_breakout else 0
-    score += 15 if vol_ok else 0
-    score += 15 if rsi_ok else 0
-    score += 20 if near_ma50w else 0
-    score += 10 if above_ma50w else 0
+    # ======================
+    # BASE PROBABILITY
+    # ======================
 
-    BUY = (
-        early_breakout
-        and trend_up
-        and near_ma50w
-        and vol_ok
-    )
+    prob = 0
+    prob += 30 if breakout else int(max(0, (last["Close"] / high20 - 0.95) * 300))
+    prob += 25 if trend_up else 0
+    prob += 20 if vol_spike else 0
+    prob += 15 if compression else 0
+    prob += 10 if rsi_ok else 0
+    prob += 5 if above_ma50w else 0
 
-    WATCH = (
-        early_breakout
-        and trend_up
-    )
+    # ======================
+    # LEARNING BOOST
+    # ======================
 
-    return score, BUY, WATCH
+    prob += learning_boost(ticker)
 
-# ======================
-# CHART CREATION
-# ======================
+    prob = min(100, max(0, prob))
 
-def create_chart(df, ticker):
+    BUY = prob >= 75 and breakout and vol_spike and trend_up
+    WATCH = prob >= 55 and compression and trend_up
 
-    df = df.tail(120)
-
-    df["MA50"] = df["Close"].rolling(50).mean()
-
-    plt.figure(figsize=(8,4))
-
-    plt.plot(df["Close"], label="Price")
-    plt.plot(df["MA50"], label="MA50")
-
-    plt.title(ticker)
-
-    plt.legend()
-
-    file_name = f"{ticker}.png"
-
-    plt.savefig(file_name)
-
-    plt.close()
-
-    return file_name
+    return prob, BUY, WATCH, high20
 
 # ======================
-# BATCH DOWNLOAD
+# CHART
 # ======================
 
-def chunks(lst, n):
-    for i in range(0, len(lst), n):
-        yield lst[i:i + n]
-
-results = []
-charts_to_send = []
-
-BATCH_SIZE = 25
-
-for batch in chunks(WATCHLIST[:200], BATCH_SIZE):
-
-    print("Downloading batch:", batch)
+def create_chart(df, ticker, high20):
 
     try:
+        df = df.tail(120)
+        df["MA50"] = df["Close"].rolling(50).mean()
 
-        data = yf.download(
-            batch,
-            period="2y",
-            interval="1d",
-            group_by="ticker",
-            progress=False
+        file = f"{ticker}.png"
+
+        mpf.plot(
+            df,
+            type="candle",
+            style="yahoo",
+            volume=True,
+            title=ticker,
+            addplot=[mpf.make_addplot(df["MA50"])],
+            hlines=dict(
+                hlines=[high20],
+                colors=["green"],
+                linestyle="--"
+            ),
+            savefig=file
         )
 
-        for ticker in batch:
+        return file
 
-            try:
+    except:
+        return None
 
-                df = data[ticker].dropna()
+# ======================
+# LEARNING LOGGER
+# ======================
 
-                if df.empty:
-                    continue
+def log_trade(ticker, prob, buy):
 
-                res = analyze(df)
+    with open(LEARNING_FILE, "a", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            datetime.utcnow().date(),
+            ticker,
+            prob,
+            int(buy),
+            0  # future return placeholder
+        ])
 
-                if res is None:
-                    continue
+# ======================
+# SCAN
+# ======================
 
-                score, buy, watch = res
+results = []
+charts = []
 
-                results.append((ticker, score, buy, watch))
+for t in WATCHLIST[:150]:
 
-                if buy or watch:
+    try:
+        df = yf.download(t, period="2y", interval="1d", progress=False)
 
-                    chart = create_chart(df, ticker)
+        if df.empty:
+            continue
 
-                    charts_to_send.append((ticker, chart))
+        res = analyze(df, t)
 
-            except:
-                continue
+        if res is None:
+            continue
 
-    except Exception as e:
-        print("Batch error:", e)
+        prob, buy, watch, high20 = res
+
+        results.append((t, prob, buy, watch))
+
+        log_trade(t, prob, buy)
+
+        if buy or watch:
+            img = create_chart(df, t, high20)
+            if img:
+                charts.append((t, img))
+
+    except:
+        continue
 
 # ======================
 # SORT
 # ======================
 
-results = sorted(results, key=lambda x: x[1], reverse=True)
+results.sort(key=lambda x: x[1], reverse=True)
 
 top = results[:15]
-
 buys = [r for r in results if r[2]]
-
 watch = [r for r in results if r[3]]
 
 # ======================
-# TELEGRAM TEXT
+# TELEGRAM
 # ======================
 
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-msg = "📊 MARKET SCANNER\n\n"
+msg = "📊 AI LEARNING MARKET SCANNER\n\n"
 
 msg += "🔥 BUY:\n"
-
-if len(buys) == 0:
-    msg += "None today\n"
-else:
-    for t, s, _, _ in buys[:10]:
-        msg += f"{t} — {s}\n"
+msg += "None today\n" if not buys else ""
+for t, p, _, _ in buys[:10]:
+    msg += f"{t} — {p}%\n"
 
 msg += "\n👀 WATCH:\n"
+for t, p, _, _ in watch[:10]:
+    msg += f"{t} — {p}%\n"
 
-for t, s, _, _ in watch[:10]:
-    msg += f"{t} — {s}\n"
-
-msg += "\n📈 TOP SCORES:\n"
-
-for t, s, _, _ in top:
-    msg += f"{t} — {s}\n"
+msg += "\n📈 TOP:\n"
+for t, p, _, _ in top:
+    msg += f"{t} — {p}%\n"
 
 requests.post(
     f"https://api.telegram.org/bot{TOKEN}/sendMessage",
@@ -268,14 +255,15 @@ requests.post(
 # SEND CHARTS
 # ======================
 
-for ticker, chart in charts_to_send[:10]:
-
-    with open(chart, "rb") as f:
-
-        requests.post(
-            f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
-            data={"chat_id": CHAT_ID},
-            files={"photo": f}
-        )
+for t, img in charts[:8]:
+    try:
+        with open(img, "rb") as f:
+            requests.post(
+                f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
+                data={"chat_id": CHAT_ID},
+                files={"photo": f}
+            )
+    except:
+        pass
 
 print(msg)
