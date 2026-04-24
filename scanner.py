@@ -36,10 +36,11 @@ def score(df):
 
     last = df.iloc[-1]
 
-    if np.isnan(last["MA50"]) or np.isnan(last["MA200"]) or np.isnan(last["RSI"]):
+    # חשוב: לא לזרוק הכל בגלל MA200
+    if np.isnan(last["MA50"]) or np.isnan(last["RSI"]):
         return None
 
-    trend = 40 if last["MA50"] > last["MA200"] else 0
+    trend = 40 if last["MA50"] > last["Close"] else 0
     rsi_score = 20 if last["RSI"] > 55 else 10
 
     bounce = 20 if last["Low"] <= last["MA50"] * 1.05 and last["Close"] >= last["MA50"] else 0
@@ -57,7 +58,8 @@ results = []
 
 for t in WATCHLIST:
     try:
-        df = yf.download(t, period="1y", interval="1wk", progress=False)
+        # FIX חשוב מאוד: daily + 2 years
+        df = yf.download(t, period="2y", interval="1d", progress=False)
 
         if df is None or df.empty:
             print(f"{t} no data")
@@ -75,13 +77,13 @@ for t in WATCHLIST:
         print(f"{t} error: {e}")
         continue
 
-# sort TOP
+# sort
 results = sorted(results, key=lambda x: x[1], reverse=True)
 
 top = results[:10]
 
 # ======================
-# TELEGRAM OUTPUT
+# TELEGRAM
 # ======================
 
 TOKEN = os.environ["TELEGRAM_TOKEN"]
