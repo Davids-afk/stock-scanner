@@ -3,6 +3,7 @@ import numpy as np
 import requests
 import os
 import pandas as pd
+import matplotlib.pyplot as plt
 
 # ======================
 # LOAD SYMBOLS
@@ -45,7 +46,7 @@ WATCHLIST = list(set(SP500 + NASDAQ100))
 print("TOTAL SYMBOLS:", len(WATCHLIST))
 
 # ======================
-# INDICATORS
+# RSI
 # ======================
 
 def rsi(series, period=14):
@@ -125,6 +126,7 @@ def analyze(df):
         early_breakout
         and trend_up
         and near_ma50w
+        and vol_ok
     )
 
     WATCH = (
@@ -135,6 +137,33 @@ def analyze(df):
     return score, BUY, WATCH
 
 # ======================
+# CHART CREATION
+# ======================
+
+def create_chart(df, ticker):
+
+    df = df.tail(120)
+
+    df["MA50"] = df["Close"].rolling(50).mean()
+
+    plt.figure(figsize=(8,4))
+
+    plt.plot(df["Close"], label="Price")
+    plt.plot(df["MA50"], label="MA50")
+
+    plt.title(ticker)
+
+    plt.legend()
+
+    file_name = f"{ticker}.png"
+
+    plt.savefig(file_name)
+
+    plt.close()
+
+    return file_name
+
+# ======================
 # BATCH DOWNLOAD
 # ======================
 
@@ -143,6 +172,7 @@ def chunks(lst, n):
         yield lst[i:i + n]
 
 results = []
+charts_to_send = []
 
 BATCH_SIZE = 25
 
@@ -178,6 +208,12 @@ for batch in chunks(WATCHLIST[:200], BATCH_SIZE):
 
                 results.append((ticker, score, buy, watch))
 
+                if buy or watch:
+
+                    chart = create_chart(df, ticker)
+
+                    charts_to_send.append((ticker, chart))
+
             except:
                 continue
 
@@ -197,7 +233,7 @@ buys = [r for r in results if r[2]]
 watch = [r for r in results if r[3]]
 
 # ======================
-# TELEGRAM
+# TELEGRAM TEXT
 # ======================
 
 TOKEN = os.environ["TELEGRAM_TOKEN"]
@@ -227,5 +263,19 @@ requests.post(
     f"https://api.telegram.org/bot{TOKEN}/sendMessage",
     data={"chat_id": CHAT_ID, "text": msg}
 )
+
+# ======================
+# SEND CHARTS
+# ======================
+
+for ticker, chart in charts_to_send[:10]:
+
+    with open(chart, "rb") as f:
+
+        requests.post(
+            f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
+            data={"chat_id": CHAT_ID},
+            files={"photo": f}
+        )
 
 print(msg)
