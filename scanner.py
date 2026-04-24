@@ -9,15 +9,21 @@ import csv
 import os.path
 
 # ======================
-# LEARNING STORAGE
+# LEARNING FILE
 # ======================
 
-LEARNING_FILE = "learning.csv"
+FILE = "ml_memory.csv"
 
-if not os.path.exists(LEARNING_FILE):
-    with open(LEARNING_FILE, "w", newline="") as f:
+if not os.path.exists(FILE):
+    with open(FILE, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["date","ticker","prob","buy","future_return"])
+        writer.writerow([
+            "date",
+            "ticker",
+            "prob",
+            "buy",
+            "future_return"
+        ])
 
 # ======================
 # UNIVERSE
@@ -55,24 +61,27 @@ def rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # ======================
-# LEARNING BOOST (simple model)
+# ML FEATURE: HISTORICAL EDGE
 # ======================
 
-def learning_boost(ticker):
+def ml_edge(ticker):
 
-    if not os.path.exists(LEARNING_FILE):
+    try:
+        df = pd.read_csv(FILE)
+
+        tdf = df[df["ticker"] == ticker].tail(30)
+
+        if len(tdf) < 5:
+            return 0
+
+        win_rate = (tdf["future_return"] > 0).mean()
+
+        avg_return = tdf["future_return"].mean()
+
+        return (win_rate - 0.5) * 20 + avg_return * 100
+
+    except:
         return 0
-
-    df = pd.read_csv(LEARNING_FILE)
-
-    recent = df[df["ticker"] == ticker].tail(20)
-
-    if len(recent) < 5:
-        return 0
-
-    win_rate = (recent["future_return"] > 0).mean()
-
-    return (win_rate - 0.5) * 20  # -10 to +10 boost
 
 # ======================
 # ANALYSIS ENGINE
@@ -89,14 +98,18 @@ def analyze(df, ticker):
     if np.isnan(last["MA50"]) or np.isnan(last["MA20"]):
         return None
 
-    trend_up = last["Close"] > last["MA50"]
+    # ======================
+    # FEATURES
+    # ======================
+
+    trend = last["Close"] > last["MA50"]
 
     high20 = df["High"].rolling(20).max().iloc[-2]
 
     breakout = last["Close"] > high20
 
-    vol_avg = df["Volume"].rolling(20).mean().iloc[-1]
-    vol_spike = last["Volume"] > vol_avg * 1.5
+    vol = df["Volume"].rolling(20).mean().iloc[-1]
+    vol_spike = last["Volume"] > vol * 1.5
 
     rsi_ok = 40 <= last["RSI"] <= 70
 
@@ -113,24 +126,49 @@ def analyze(df, ticker):
 
     prob = 0
     prob += 30 if breakout else int(max(0, (last["Close"] / high20 - 0.95) * 300))
-    prob += 25 if trend_up else 0
+    prob += 25 if trend else 0
     prob += 20 if vol_spike else 0
     prob += 15 if compression else 0
     prob += 10 if rsi_ok else 0
     prob += 5 if above_ma50w else 0
 
     # ======================
-    # LEARNING BOOST
+    # ML BOOST
     # ======================
 
-    prob += learning_boost(ticker)
+    prob += ml_edge(ticker)
 
     prob = min(100, max(0, prob))
 
-    BUY = prob >= 75 and breakout and vol_spike and trend_up
-    WATCH = prob >= 55 and compression and trend_up
+    BUY = prob >= 75 and breakout and vol_spike and trend
+    WATCH = prob >= 55 and compression and trend
 
     return prob, BUY, WATCH, high20
+
+# ======================
+# LEARNING UPDATE (TRUE PREDICTION FEEDBACK)
+# ======================
+
+def log_and_learn(ticker, prob, buy, df):
+
+    try:
+        close_now = df["Close"].iloc[-1]
+        close_future = df["Close"].iloc[-6] if len(df) > 6 else close_now
+
+        future_return = (close_future / close_now) - 1
+
+        with open(FILE, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                datetime.utcnow().date(),
+                ticker,
+                prob,
+                int(buy),
+                future_return
+            ])
+
+    except:
+        pass
 
 # ======================
 # CHART
@@ -165,29 +203,13 @@ def create_chart(df, ticker, high20):
         return None
 
 # ======================
-# LEARNING LOGGER
-# ======================
-
-def log_trade(ticker, prob, buy):
-
-    with open(LEARNING_FILE, "a", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            datetime.utcnow().date(),
-            ticker,
-            prob,
-            int(buy),
-            0  # future return placeholder
-        ])
-
-# ======================
 # SCAN
 # ======================
 
 results = []
 charts = []
 
-for t in WATCHLIST[:150]:
+for t in WATCHLIST[:120]:
 
     try:
         df = yf.download(t, period="2y", interval="1d", progress=False)
@@ -204,7 +226,7 @@ for t in WATCHLIST[:150]:
 
         results.append((t, prob, buy, watch))
 
-        log_trade(t, prob, buy)
+        log_and_learn(t, prob, buy, df)
 
         if buy or watch:
             img = create_chart(df, t, high20)
@@ -231,7 +253,7 @@ watch = [r for r in results if r[3]]
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-msg = "📊 AI LEARNING MARKET SCANNER\n\n"
+msg = "📊 PREDICTIVE ML SCANNER\n\n"
 
 msg += "🔥 BUY:\n"
 msg += "None today\n" if not buys else ""
