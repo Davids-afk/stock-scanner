@@ -4,20 +4,6 @@ import requests
 import os
 import pandas as pd
 import mplfinance as mpf
-from datetime import datetime
-import csv
-import os.path
-
-# ======================
-# MEMORY
-# ======================
-
-FILE = "ml_memory.csv"
-
-if not os.path.exists(FILE):
-    with open(FILE, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["date","ticker","prob","buy","future_return"])
 
 # ======================
 # UNIVERSE
@@ -55,54 +41,15 @@ def rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # ======================
-# MARKET REGIME DETECTION
+# ANALYSIS (BASIC RULES ONLY)
 # ======================
 
-def detect_regime(df):
-
-    ma50 = df["Close"].rolling(50).mean()
-    ma200 = df["Close"].rolling(200).mean()
-
-    last = df["Close"].iloc[-1]
-
-    trend_strength = (ma50.iloc[-1] / ma200.iloc[-1]) if not np.isnan(ma200.iloc[-1]) else 1
-
-    volatility = df["Close"].pct_change().rolling(20).std().iloc[-1]
-
-    if trend_strength > 1.02 and last > ma50.iloc[-1]:
-        return "TREND_UP", 15
-
-    if trend_strength < 0.98:
-        return "DOWN", -10
-
-    if volatility > 0.02:
-        return "CHOP", -5
-
-    return "NEUTRAL", 0
-
-# ======================
-# ML EDGE
-# ======================
-
-def ml_edge(ticker):
-    try:
-        df = pd.read_csv(FILE)
-        tdf = df[df["ticker"] == ticker].tail(30)
-        if len(tdf) < 5:
-            return 0
-        return (tdf["future_return"].mean()) * 50
-    except:
-        return 0
-
-# ======================
-# ANALYSIS
-# ======================
-
-def analyze(df, ticker):
+def analyze(df):
 
     df["MA50"] = df["Close"].rolling(50).mean()
     df["MA20"] = df["Close"].rolling(20).mean()
     df["RSI"] = rsi(df["Close"])
+    df["VOL_AVG"] = df["Volume"].rolling(20).mean()
 
     last = df.iloc[-1]
 
@@ -110,85 +57,61 @@ def analyze(df, ticker):
         return None
 
     # ======================
-    # FEATURES
+    # CORE CONDITIONS
     # ======================
 
-    trend = last["Close"] > last["MA50"]
+    trend_up = last["Close"] > last["MA50"]
 
+    # bounce on MA50
+    bounce = (
+        last["Low"] <= last["MA50"] * 1.02 and
+        last["Close"] > last["MA50"]
+    )
+
+    # RSI normal zone
+    rsi_ok = 40 <= last["RSI"] <= 70
+
+    # volume confirmation
+    vol_ok = last["Volume"] > last["VOL_AVG"]
+
+    # near breakout
     high20 = df["High"].rolling(20).max().iloc[-2]
-    breakout = last["Close"] > high20
+    breakout_ready = last["Close"] >= high20 * 0.98
 
-    vol_avg = df["Volume"].rolling(20).mean().iloc[-1]
-    vol_spike = last["Volume"] > vol_avg * 1.2
-
-    rsi_ok = 35 <= last["RSI"] <= 75
-
-    range20 = df["High"].rolling(20).max().iloc[-1] - df["Low"].rolling(20).min().iloc[-1]
-    compression = (range20 / last["Close"]) < 0.15
-
-    regime, regime_score = detect_regime(df)
+    # weekly trend (MA50 weekly)
+    weekly = df.resample("W").last()
+    ma50w = weekly["Close"].rolling(50).mean().iloc[-1]
+    above_weekly = last["Close"] > ma50w if not np.isnan(ma50w) else True
 
     # ======================
-    # PROBABILITY
+    # SCORE
     # ======================
 
-    prob = 0
-    prob += 25 if trend else 0
-    prob += 25 if breakout else 10
-    prob += 15 if vol_spike else 5
-    prob += 15 if compression else 5
-    prob += 10 if rsi_ok else 0
-
-    prob += ml_edge(ticker)
-    prob += regime_score
-
-    prob = min(100, max(0, prob))
+    score = 0
+    score += 30 if trend_up else 0
+    score += 20 if bounce else 0
+    score += 15 if rsi_ok else 0
+    score += 15 if vol_ok else 0
+    score += 10 if breakout_ready else 0
+    score += 10 if above_weekly else 0
 
     # ======================
-    # SIGNALS (REGIME ADAPTIVE)
+    # SIGNALS
     # ======================
 
-    if regime == "TREND_UP":
-        BUY_THRESHOLD = 65
-        SETUP_THRESHOLD = 55
-    elif regime == "CHOP":
-        BUY_THRESHOLD = 75
-        SETUP_THRESHOLD = 65
-    else:
-        BUY_THRESHOLD = 70
-        SETUP_THRESHOLD = 60
+    BUY = (
+        trend_up and
+        (bounce or breakout_ready) and
+        vol_ok and
+        rsi_ok
+    )
 
-    BUY = prob >= BUY_THRESHOLD and trend and (breakout or vol_spike)
+    WATCH = (
+        trend_up and
+        score >= 50
+    )
 
-    SETUP = prob >= SETUP_THRESHOLD
-
-    WATCH = prob >= 50
-
-    return prob, BUY, SETUP, WATCH, high20, regime
-
-# ======================
-# LOG
-# ======================
-
-def log_ml(ticker, prob, buy, df):
-
-    try:
-        close_now = df["Close"].iloc[-1]
-        close_future = df["Close"].iloc[-6] if len(df) > 6 else close_now
-
-        future_return = (close_future / close_now) - 1
-
-        with open(FILE, "a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                datetime.utcnow().date(),
-                ticker,
-                prob,
-                int(buy),
-                future_return
-            ])
-    except:
-        pass
+    return score, BUY, WATCH, high20
 
 # ======================
 # CHART
@@ -196,31 +119,27 @@ def log_ml(ticker, prob, buy, df):
 
 def create_chart(df, ticker, high20):
 
-    try:
-        df = df.tail(120)
-        df["MA50"] = df["Close"].rolling(50).mean()
+    df = df.tail(120)
+    df["MA50"] = df["Close"].rolling(50).mean()
 
-        file = f"{ticker}.png"
+    file = f"{ticker}.png"
 
-        mpf.plot(
-            df,
-            type="candle",
-            style="yahoo",
-            volume=True,
-            title=ticker,
-            addplot=[mpf.make_addplot(df["MA50"])],
-            hlines=dict(
-                hlines=[high20],
-                colors=["green"],
-                linestyle="--"
-            ),
-            savefig=file
-        )
+    mpf.plot(
+        df,
+        type="candle",
+        style="yahoo",
+        volume=True,
+        title=ticker,
+        addplot=[mpf.make_addplot(df["MA50"])],
+        hlines=dict(
+            hlines=[high20],
+            colors=["green"],
+            linestyle="--"
+        ),
+        savefig=file
+    )
 
-        return file
-
-    except:
-        return None
+    return file
 
 # ======================
 # SCAN
@@ -232,28 +151,24 @@ charts = []
 for t in WATCHLIST[:120]:
 
     try:
-        df = yf.download(t, period="2y", interval="1d", progress=False)
+        df = yf.download(t, period="1y", interval="1d", progress=False)
 
-        if df is None or df.empty:
+        if df.empty:
             continue
 
-        res = analyze(df, t)
+        res = analyze(df)
 
         if res is None:
             continue
 
-        prob, buy, setup, watch, high20, regime = res
+        score, buy, watch, high20 = res
 
-        results.append((t, prob, buy, setup, watch, regime))
+        results.append((t, score, buy, watch))
 
-        log_ml(t, prob, buy, df)
+        if buy or watch:
+            charts.append((t, create_chart(df, t, high20)))
 
-        if buy or setup:
-            img = create_chart(df, t, high20)
-            if img:
-                charts.append((t, img))
-
-        print(t, "prob:", prob, "buy:", buy, "setup:", setup, "regime:", regime)
+        print(t, "score:", score, "buy:", buy, "watch:", watch)
 
     except:
         continue
@@ -266,8 +181,7 @@ results.sort(key=lambda x: x[1], reverse=True)
 
 top = results[:15]
 buys = [r for r in results if r[2]]
-setups = [r for r in results if r[3]]
-watch = [r for r in results if r[4]]
+watch = [r for r in results if r[3]]
 
 # ======================
 # TELEGRAM
@@ -276,24 +190,20 @@ watch = [r for r in results if r[4]]
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-msg = "📊 MARKET REGIME ML SCANNER\n\n"
+msg = "📊 BASIC MARKET SCANNER\n\n"
 
 msg += "🔥 BUY:\n"
 msg += "None today\n" if not buys else ""
-for t, p, *_ in buys[:10]:
-    msg += f"{t} — {p}%\n"
-
-msg += "\n🟡 SETUPS:\n"
-for t, p, *_ in setups[:10]:
-    msg += f"{t} — {p}%\n"
+for t, s, _, _ in buys[:10]:
+    msg += f"{t} — {s}\n"
 
 msg += "\n👀 WATCH:\n"
-for t, p, *_ in watch[:10]:
-    msg += f"{t} — {p}%\n"
+for t, s, _, _ in watch[:10]:
+    msg += f"{t} — {s}\n"
 
 msg += "\n📈 TOP:\n"
-for t, p, *_ in top:
-    msg += f"{t} — {p}%\n"
+for t, s, _, _ in top:
+    msg += f"{t} — {s}\n"
 
 requests.post(
     f"https://api.telegram.org/bot{TOKEN}/sendMessage",
@@ -301,7 +211,7 @@ requests.post(
 )
 
 # ======================
-# CHARTS
+# SEND CHARTS
 # ======================
 
 for t, img in charts[:8]:
