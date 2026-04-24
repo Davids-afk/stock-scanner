@@ -9,7 +9,7 @@ import csv
 import os.path
 
 # ======================
-# MEMORY (LEARNING)
+# MEMORY FILE
 # ======================
 
 FILE = "ml_memory.csv"
@@ -41,7 +41,7 @@ def load_nasdaq100():
 
 WATCHLIST = list(set(load_sp500() + load_nasdaq100()))
 
-print("TOTAL:", len(WATCHLIST))
+print("TOTAL SYMBOLS:", len(WATCHLIST))
 
 # ======================
 # RSI
@@ -59,17 +59,14 @@ def rsi(series, period=14):
 # ======================
 
 def ml_edge(ticker):
-
     try:
         df = pd.read_csv(FILE)
-
         tdf = df[df["ticker"] == ticker].tail(30)
 
         if len(tdf) < 5:
             return 0
 
         win_rate = (tdf["future_return"] > 0).mean()
-
         return (win_rate - 0.5) * 20
 
     except:
@@ -100,12 +97,12 @@ def analyze(df, ticker):
     breakout = last["Close"] > high20
 
     vol_avg = df["Volume"].rolling(20).mean().iloc[-1]
-    vol_spike = last["Volume"] > vol_avg * 1.3   # פחות קשיח
+    vol_spike = last["Volume"] > vol_avg * 1.25
 
     rsi_ok = 35 <= last["RSI"] <= 75
 
     range20 = df["High"].rolling(20).max().iloc[-1] - df["Low"].rolling(20).min().iloc[-1]
-    compression = (range20 / last["Close"]) < 0.15  # פחות קשיח
+    compression = (range20 / last["Close"]) < 0.15
 
     weekly = df.resample("W").last()
     ma50w = weekly["Close"].rolling(50).mean().iloc[-1]
@@ -116,8 +113,8 @@ def analyze(df, ticker):
     # ======================
 
     prob = 0
-    prob += 25 if breakout else 10
     prob += 25 if trend else 0
+    prob += 25 if breakout else 10
     prob += 15 if vol_spike else 5
     prob += 15 if compression else 5
     prob += 10 if rsi_ok else 0
@@ -128,7 +125,7 @@ def analyze(df, ticker):
     prob = min(100, max(0, prob))
 
     # ======================
-    # SIGNALS (FIXED BALANCED)
+    # SIGNALS (FIXED BALANCE)
     # ======================
 
     BUY = (
@@ -137,12 +134,16 @@ def analyze(df, ticker):
         and (breakout or vol_spike)
     )
 
-    WATCH = (
-        prob >= 50
+    SETUP = (
+        prob >= 60
         and trend
     )
 
-    return prob, BUY, WATCH, high20
+    WATCH = (
+        prob >= 50
+    )
+
+    return prob, BUY, SETUP, WATCH, high20
 
 # ======================
 # LEARNING LOG
@@ -165,7 +166,6 @@ def log_ml(ticker, prob, buy, df):
                 int(buy),
                 future_return
             ])
-
     except:
         pass
 
@@ -221,19 +221,18 @@ for t in WATCHLIST[:120]:
         if res is None:
             continue
 
-        prob, buy, watch, high20 = res
+        prob, buy, setup, watch, high20 = res
 
-        results.append((t, prob, buy, watch))
+        results.append((t, prob, buy, setup, watch))
 
         log_ml(t, prob, buy, df)
 
-        if buy or watch:
+        if buy or setup:
             img = create_chart(df, t, high20)
             if img:
                 charts.append((t, img))
 
-        # DEBUG חשוב
-        print(t, "prob:", prob, "buy:", buy, "watch:", watch)
+        print(t, "prob:", prob, "buy:", buy, "setup:", setup, "watch:", watch)
 
     except:
         continue
@@ -246,7 +245,8 @@ results.sort(key=lambda x: x[1], reverse=True)
 
 top = results[:15]
 buys = [r for r in results if r[2]]
-watch = [r for r in results if r[3]]
+setups = [r for r in results if r[3]]
+watch = [r for r in results if r[4]]
 
 # ======================
 # TELEGRAM
@@ -255,19 +255,23 @@ watch = [r for r in results if r[3]]
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-msg = "📊 FIXED ML SCANNER\n\n"
+msg = "📊 PRO ML SCANNER (STABLE)\n\n"
 
 msg += "🔥 BUY:\n"
 msg += "None today\n" if not buys else ""
-for t, p, _, _ in buys[:10]:
+for t, p, *_ in buys[:10]:
+    msg += f"{t} — {p}%\n"
+
+msg += "\n🟡 SETUPS:\n"
+for t, p, *_ in setups[:10]:
     msg += f"{t} — {p}%\n"
 
 msg += "\n👀 WATCH:\n"
-for t, p, _, _ in watch[:10]:
+for t, p, *_ in watch[:10]:
     msg += f"{t} — {p}%\n"
 
 msg += "\n📈 TOP:\n"
-for t, p, _, _ in top:
+for t, p, *_ in top:
     msg += f"{t} — {p}%\n"
 
 requests.post(
