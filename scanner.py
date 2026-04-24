@@ -45,7 +45,7 @@ WATCHLIST = list(set(SP500 + NASDAQ100))
 print("TOTAL SYMBOLS:", len(WATCHLIST))
 
 # ======================
-# RSI
+# INDICATORS
 # ======================
 
 def rsi(series, period=14):
@@ -72,7 +72,7 @@ def weekly_ma50(df):
     last = weekly.iloc[-1]
 
     if np.isnan(last["MA50W"]):
-        return False, 999   # במקום None
+        return False, 999
 
     price = last["Close"]
     ma50w = last["MA50W"]
@@ -91,7 +91,6 @@ def analyze(df):
     df["MA50"] = df["Close"].rolling(50).mean()
 
     df["RSI"] = rsi(df["Close"])
-
     df["VOL_AVG"] = df["Volume"].rolling(20).mean()
 
     last = df.iloc[-1]
@@ -101,21 +100,16 @@ def analyze(df):
 
     above_ma50w, dist_ma50w = weekly_ma50(df)
 
-    # TREND
     trend_up = last["Close"] > last["MA50"]
 
-    # EARLY BREAKOUT (יותר רך)
     high_20 = df["High"].rolling(20).max().iloc[-2]
 
     early_breakout = last["Close"] > high_20 * 0.97
 
-    # VOLUME
-    vol_ok = last["Volume"] > last["VOL_AVG"] * 0.9
+    vol_ok = last["Volume"] > last["VOL_AVG"] * 0.8
 
-    # RSI
     rsi_ok = 40 <= last["RSI"] <= 75
 
-    # קרוב ל-MA50W
     near_ma50w = dist_ma50w < 10
 
     score = 0
@@ -141,38 +135,54 @@ def analyze(df):
     return score, BUY, WATCH
 
 # ======================
-# SCAN
+# BATCH DOWNLOAD
 # ======================
+
+def chunks(lst, n):
+    for i in range(0, len(lst), n):
+        yield lst[i:i + n]
 
 results = []
 
-LIMIT = 200   # כדי לא להעמיס על GitHub
+BATCH_SIZE = 25
 
-for t in WATCHLIST[:LIMIT]:
+for batch in chunks(WATCHLIST[:200], BATCH_SIZE):
+
+    print("Downloading batch:", batch)
 
     try:
 
-        df = yf.download(
-            t,
+        data = yf.download(
+            batch,
             period="2y",
             interval="1d",
+            group_by="ticker",
             progress=False
         )
 
-        if df.empty:
-            continue
+        for ticker in batch:
 
-        res = analyze(df)
+            try:
 
-        if res is None:
-            continue
+                df = data[ticker].dropna()
 
-        score, buy, watch = res
+                if df.empty:
+                    continue
 
-        results.append((t, score, buy, watch))
+                res = analyze(df)
+
+                if res is None:
+                    continue
+
+                score, buy, watch = res
+
+                results.append((ticker, score, buy, watch))
+
+            except:
+                continue
 
     except Exception as e:
-        print(t, e)
+        print("Batch error:", e)
 
 # ======================
 # SORT
