@@ -3,7 +3,6 @@ import numpy as np
 import requests
 import os
 import pandas as pd
-import matplotlib.pyplot as plt
 
 # ======================
 # LOAD SYMBOLS
@@ -18,7 +17,6 @@ def load_sp500():
         symbols = table["Symbol"].tolist()
         symbols = [s.replace(".", "-") for s in symbols]
 
-        print("SP500:", len(symbols))
         return symbols
 
     except:
@@ -34,8 +32,6 @@ def load_nasdaq100():
             if "Ticker" in t.columns:
                 symbols = t["Ticker"].tolist()
                 symbols = [s.replace(".", "-") for s in symbols]
-
-                print("NASDAQ100:", len(symbols))
                 return symbols
 
     except:
@@ -46,10 +42,10 @@ NASDAQ100 = load_nasdaq100()
 
 WATCHLIST = list(set(SP500 + NASDAQ100))
 
-print("TOTAL:", len(WATCHLIST))
+print("TOTAL SYMBOLS:", len(WATCHLIST))
 
 # ======================
-# INDICATORS
+# RSI
 # ======================
 
 def rsi(series, period=14):
@@ -76,7 +72,7 @@ def weekly_ma50(df):
     last = weekly.iloc[-1]
 
     if np.isnan(last["MA50W"]):
-        return None
+        return False, 999   # במקום None
 
     price = last["Close"]
     ma50w = last["MA50W"]
@@ -100,29 +96,27 @@ def analyze(df):
 
     last = df.iloc[-1]
 
-    weekly = weekly_ma50(df)
-
-    if weekly is None:
+    if np.isnan(last["MA20"]) or np.isnan(last["MA50"]):
         return None
 
-    above_ma50w, dist_ma50w = weekly
+    above_ma50w, dist_ma50w = weekly_ma50(df)
 
-    # Trend
+    # TREND
     trend_up = last["Close"] > last["MA50"]
 
-    # Early Breakout
+    # EARLY BREAKOUT (יותר רך)
     high_20 = df["High"].rolling(20).max().iloc[-2]
 
-    early_breakout = last["Close"] > high_20 * 0.98
+    early_breakout = last["Close"] > high_20 * 0.97
 
-    # Volume
-    vol_ok = last["Volume"] > last["VOL_AVG"]
+    # VOLUME
+    vol_ok = last["Volume"] > last["VOL_AVG"] * 0.9
 
     # RSI
-    rsi_ok = 45 <= last["RSI"] <= 70
+    rsi_ok = 40 <= last["RSI"] <= 75
 
-    # Near MA50 weekly
-    near_ma50w = dist_ma50w < 8
+    # קרוב ל-MA50W
+    near_ma50w = dist_ma50w < 10
 
     score = 0
 
@@ -131,18 +125,17 @@ def analyze(df):
     score += 15 if vol_ok else 0
     score += 15 if rsi_ok else 0
     score += 20 if near_ma50w else 0
+    score += 10 if above_ma50w else 0
 
     BUY = (
-        early_breakout and
-        vol_ok and
-        trend_up and
-        near_ma50w
+        early_breakout
+        and trend_up
+        and near_ma50w
     )
 
     WATCH = (
-        early_breakout and
-        trend_up and
-        near_ma50w
+        early_breakout
+        and trend_up
     )
 
     return score, BUY, WATCH
@@ -153,7 +146,9 @@ def analyze(df):
 
 results = []
 
-for t in WATCHLIST[:200]:   # הגבלה זמנית ליציבות
+LIMIT = 200   # כדי לא להעמיס על GitHub
+
+for t in WATCHLIST[:LIMIT]:
 
     try:
 
