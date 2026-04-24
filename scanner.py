@@ -88,8 +88,8 @@ def analyze(df):
     trend_up = last["Close"] > last["MA50"]
 
     # breakout early
-    high20 = df["High"].rolling(20).max().iloc[-2]
-    breakout = last["Close"] > high20 * 0.97
+    # high20 = df["High"].rolling(20).max().iloc[-2]
+    # breakout = last["Close"] > high20 * 0.97
 
     # volume
     vol_ok = last["Volume"] > last["VOL_AVG"]
@@ -97,9 +97,9 @@ def analyze(df):
     # RSI
     rsi_ok = 40 <= last["RSI"] <= 75
 
-    # weekly support (5%)
+    # weekly support (10%)
     _, dist = weekly_ma50(df)
-    near_weekly = dist < 5
+    near_weekly = dist < 10
 
     # EMA trend
     ema_trend = last["EMA3"] > last["EMA8"]
