@@ -12,8 +12,8 @@ NASDAQ100 = ["AMD","ADBE","NFLX","INTC","CSCO","PEP","COST","QCOM","TXN","AMGN"]
 
 WATCHLIST = list(set(SP500 + NASDAQ100))
 
-TOKEN = "8728126598:AAGxGayciokTqgIYCEtTTnJ-_MGANTltwaY"
-CHAT_ID = "t.me/Davidsstocksbot"
+TOKEN = "Enter Token"
+CHAT_ID = "Enter chat ID"
 
 # ======================
 # INDICATORS
@@ -70,6 +70,13 @@ results = sorted(results, key=lambda x: x[1], reverse=True)[:10]
 # ======================
 # TELEGRAM OUTPUT
 # ======================
+
+
+import os
+
+TOKEN = os.environ["TELEGRAM_TOKEN"]
+CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+
 
 msg = "📊 TOP 10 S&P + NASDAQ\n\n"
 
