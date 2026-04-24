@@ -12,8 +12,8 @@ NASDAQ100 = ["AMD","ADBE","NFLX","INTC","CSCO","PEP","COST","QCOM","TXN","AMGN"]
 
 WATCHLIST = list(set(SP500 + NASDAQ100))
 
-TOKEN = "PUT_YOUR_TELEGRAM_BOT_TOKEN"
-CHAT_ID = "PUT_YOUR_CHAT_ID"
+TOKEN = "8728126598:AAGxGayciokTqgIYCEtTTnJ-_MGANTltwaY"
+CHAT_ID = "t.me/Davidsstocksbot"
 
 # ======================
 # INDICATORS
