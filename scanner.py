@@ -6,7 +6,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # ======================
-# LOAD SYMBOLS
+# LOAD UNIVERSE
 # ======================
 
 def load_sp500():
@@ -14,60 +14,39 @@ def load_sp500():
         table = pd.read_html(
             "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
         )[0]
-
-        symbols = table["Symbol"].tolist()
-        symbols = [s.replace(".", "-") for s in symbols]
-
-        return symbols
-
+        return [s.replace(".", "-") for s in table["Symbol"].tolist()]
     except:
         return ["AAPL","MSFT","NVDA","AMZN","GOOGL"]
 
 def load_nasdaq100():
     try:
-        tables = pd.read_html(
-            "https://en.wikipedia.org/wiki/Nasdaq-100"
-        )
-
+        tables = pd.read_html("https://en.wikipedia.org/wiki/Nasdaq-100")
         for t in tables:
             if "Ticker" in t.columns:
-                symbols = t["Ticker"].tolist()
-                symbols = [s.replace(".", "-") for s in symbols]
-                return symbols
-
+                return [s.replace(".", "-") for s in t["Ticker"].tolist()]
     except:
         return ["AMD","ADBE","NFLX"]
 
-SP500 = load_sp500()
-NASDAQ100 = load_nasdaq100()
-
-WATCHLIST = list(set(SP500 + NASDAQ100))
-
-print("TOTAL SYMBOLS:", len(WATCHLIST))
+WATCHLIST = list(set(load_sp500() + load_nasdaq100()))
+print("TOTAL:", len(WATCHLIST))
 
 # ======================
 # RSI
 # ======================
 
 def rsi(series, period=14):
-
     delta = series.diff()
-
     gain = delta.clip(lower=0).rolling(period).mean()
     loss = (-delta.clip(upper=0)).rolling(period).mean()
-
     rs = gain / loss
-
     return 100 - (100 / (1 + rs))
 
 # ======================
-# WEEKLY MA50
+# WEEKLY MA50 (5%)
 # ======================
 
 def weekly_ma50(df):
-
     weekly = df.resample("W").last()
-
     weekly["MA50W"] = weekly["Close"].rolling(50).mean()
 
     last = weekly.iloc[-1]
@@ -78,9 +57,9 @@ def weekly_ma50(df):
     price = last["Close"]
     ma50w = last["MA50W"]
 
-    distance = abs(price - ma50w) / ma50w * 100
+    dist = abs(price - ma50w) / ma50w * 100
 
-    return price > ma50w, distance
+    return price > ma50w, dist
 
 # ======================
 # ANALYSIS
@@ -88,174 +67,173 @@ def weekly_ma50(df):
 
 def analyze(df):
 
-    df["MA20"] = df["Close"].rolling(20).mean()
     df["MA50"] = df["Close"].rolling(50).mean()
+    df["MA20"] = df["Close"].rolling(20).mean()
+
+    df["EMA3"] = df["Close"].ewm(span=3).mean()
+    df["EMA8"] = df["Close"].ewm(span=8).mean()
 
     df["RSI"] = rsi(df["Close"])
     df["VOL_AVG"] = df["Volume"].rolling(20).mean()
 
     last = df.iloc[-1]
 
-    if np.isnan(last["MA20"]) or np.isnan(last["MA50"]):
+    if np.isnan(last["MA50"]) or np.isnan(last["MA20"]):
         return None
 
-    above_ma50w, dist_ma50w = weekly_ma50(df)
+    # ======================
+    # CORE CONDITIONS
+    # ======================
 
     trend_up = last["Close"] > last["MA50"]
 
-    high_20 = df["High"].rolling(20).max().iloc[-2]
+    # breakout early
+    high20 = df["High"].rolling(20).max().iloc[-2]
+    breakout = last["Close"] > high20 * 0.97
 
-    early_breakout = last["Close"] > high_20 * 0.97
+    # volume
+    vol_ok = last["Volume"] > last["VOL_AVG"]
 
-    vol_ok = last["Volume"] > last["VOL_AVG"] * 0.8
-
+    # RSI
     rsi_ok = 40 <= last["RSI"] <= 75
 
-    near_ma50w = dist_ma50w < 10
+    # weekly support (5%)
+    _, dist = weekly_ma50(df)
+    near_weekly = dist < 5
+
+    # EMA trend
+    ema_trend = last["EMA3"] > last["EMA8"]
+
+    ema_slope = (
+        df["EMA3"].iloc[-1] > df["EMA3"].iloc[-2]
+        and df["EMA8"].iloc[-1] > df["EMA8"].iloc[-2]
+    )
+
+    ema_ok = ema_trend and ema_slope
+
+    # ======================
+    # SCORE
+    # ======================
 
     score = 0
-
     score += 25 if trend_up else 0
-    score += 25 if early_breakout else 0
+    score += 20 if breakout else 0
     score += 15 if vol_ok else 0
     score += 15 if rsi_ok else 0
-    score += 20 if near_ma50w else 0
-    score += 10 if above_ma50w else 0
+    score += 15 if near_weekly else 0
+    score += 10 if ema_ok else 0
+
+    # ======================
+    # SIGNALS
+    # ======================
 
     BUY = (
-        early_breakout
-        and trend_up
-        and near_ma50w
+        trend_up
+        and breakout
         and vol_ok
+        and near_weekly
+        and ema_ok
     )
 
     WATCH = (
-        early_breakout
-        and trend_up
+        trend_up
+        and ema_ok
+        and score >= 50
     )
 
-    return score, BUY, WATCH
+    return score, BUY, WATCH, high20
 
 # ======================
-# CHART CREATION
+# CHART (CANDLE + MA + EMA)
 # ======================
 
-def create_chart(df, ticker):
+def create_chart(df, ticker, high20):
 
     df = df.tail(120)
 
     df["MA50"] = df["Close"].rolling(50).mean()
+    df["EMA3"] = df["Close"].ewm(span=3).mean()
+    df["EMA8"] = df["Close"].ewm(span=8).mean()
 
-    plt.figure(figsize=(8,4))
+    plt.figure(figsize=(10,5))
 
     plt.plot(df["Close"], label="Price")
     plt.plot(df["MA50"], label="MA50")
+    plt.plot(df["EMA3"], label="EMA3")
+    plt.plot(df["EMA8"], label="EMA8")
+
+    plt.axhline(high20, linestyle="--", color="green", label="Breakout")
 
     plt.title(ticker)
-
     plt.legend()
 
-    file_name = f"{ticker}.png"
-
-    plt.savefig(file_name)
-
+    file = f"{ticker}.png"
+    plt.savefig(file)
     plt.close()
 
-    return file_name
+    return file
 
 # ======================
-# BATCH DOWNLOAD
+# SCAN
 # ======================
-
-def chunks(lst, n):
-    for i in range(0, len(lst), n):
-        yield lst[i:i + n]
 
 results = []
-charts_to_send = []
+charts = []
 
-BATCH_SIZE = 25
-
-for batch in chunks(WATCHLIST[:200], BATCH_SIZE):
-
-    print("Downloading batch:", batch)
+for t in WATCHLIST[:150]:
 
     try:
+        df = yf.download(t, period="1y", interval="1d", progress=False)
 
-        data = yf.download(
-            batch,
-            period="2y",
-            interval="1d",
-            group_by="ticker",
-            progress=False
-        )
+        if df.empty:
+            continue
 
-        for ticker in batch:
+        res = analyze(df)
 
-            try:
+        if res is None:
+            continue
 
-                df = data[ticker].dropna()
+        score, buy, watch, high20 = res
 
-                if df.empty:
-                    continue
+        results.append((t, score, buy, watch))
 
-                res = analyze(df)
+        if buy or watch:
+            charts.append((t, create_chart(df, t, high20)))
 
-                if res is None:
-                    continue
+        print(t, "score:", score, "buy:", buy, "watch:", watch)
 
-                score, buy, watch = res
-
-                results.append((ticker, score, buy, watch))
-
-                if buy or watch:
-
-                    chart = create_chart(df, ticker)
-
-                    charts_to_send.append((ticker, chart))
-
-            except:
-                continue
-
-    except Exception as e:
-        print("Batch error:", e)
+    except:
+        continue
 
 # ======================
 # SORT
 # ======================
 
-results = sorted(results, key=lambda x: x[1], reverse=True)
+results.sort(key=lambda x: x[1], reverse=True)
 
 top = results[:15]
-
 buys = [r for r in results if r[2]]
-
 watch = [r for r in results if r[3]]
 
 # ======================
-# TELEGRAM TEXT
+# TELEGRAM
 # ======================
 
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-msg = "📊 MARKET SCANNER\n\n"
+msg = "📊 STABLE MOMENTUM SCANNER\n\n"
 
 msg += "🔥 BUY:\n"
-
-if len(buys) == 0:
-    msg += "None today\n"
-else:
-    for t, s, _, _ in buys[:10]:
-        msg += f"{t} — {s}\n"
+msg += "None today\n" if not buys else ""
+for t, s, _, _ in buys[:10]:
+    msg += f"{t} — {s}\n"
 
 msg += "\n👀 WATCH:\n"
-
 for t, s, _, _ in watch[:10]:
     msg += f"{t} — {s}\n"
 
-msg += "\n📈 TOP SCORES:\n"
-
+msg += "\n📈 TOP:\n"
 for t, s, _, _ in top:
     msg += f"{t} — {s}\n"
 
@@ -268,14 +246,15 @@ requests.post(
 # SEND CHARTS
 # ======================
 
-for ticker, chart in charts_to_send[:10]:
-
-    with open(chart, "rb") as f:
-
-        requests.post(
-            f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
-            data={"chat_id": CHAT_ID},
-            files={"photo": f}
-        )
+for t, img in charts[:10]:
+    try:
+        with open(img, "rb") as f:
+            requests.post(
+                f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
+                data={"chat_id": CHAT_ID},
+                files={"photo": f}
+            )
+    except:
+        pass
 
 print(msg)
