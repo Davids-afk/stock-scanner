@@ -9,7 +9,7 @@ import csv
 import os.path
 
 # ======================
-# MEMORY FILE
+# MEMORY
 # ======================
 
 FILE = "ml_memory.csv"
@@ -41,7 +41,7 @@ def load_nasdaq100():
 
 WATCHLIST = list(set(load_sp500() + load_nasdaq100()))
 
-print("TOTAL SYMBOLS:", len(WATCHLIST))
+print("TOTAL:", len(WATCHLIST))
 
 # ======================
 # RSI
@@ -55,25 +55,47 @@ def rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # ======================
-# LEARNING BOOST
+# MARKET REGIME DETECTION
+# ======================
+
+def detect_regime(df):
+
+    ma50 = df["Close"].rolling(50).mean()
+    ma200 = df["Close"].rolling(200).mean()
+
+    last = df["Close"].iloc[-1]
+
+    trend_strength = (ma50.iloc[-1] / ma200.iloc[-1]) if not np.isnan(ma200.iloc[-1]) else 1
+
+    volatility = df["Close"].pct_change().rolling(20).std().iloc[-1]
+
+    if trend_strength > 1.02 and last > ma50.iloc[-1]:
+        return "TREND_UP", 15
+
+    if trend_strength < 0.98:
+        return "DOWN", -10
+
+    if volatility > 0.02:
+        return "CHOP", -5
+
+    return "NEUTRAL", 0
+
+# ======================
+# ML EDGE
 # ======================
 
 def ml_edge(ticker):
     try:
         df = pd.read_csv(FILE)
         tdf = df[df["ticker"] == ticker].tail(30)
-
         if len(tdf) < 5:
             return 0
-
-        win_rate = (tdf["future_return"] > 0).mean()
-        return (win_rate - 0.5) * 20
-
+        return (tdf["future_return"].mean()) * 50
     except:
         return 0
 
 # ======================
-# ANALYSIS ENGINE
+# ANALYSIS
 # ======================
 
 def analyze(df, ticker):
@@ -97,19 +119,17 @@ def analyze(df, ticker):
     breakout = last["Close"] > high20
 
     vol_avg = df["Volume"].rolling(20).mean().iloc[-1]
-    vol_spike = last["Volume"] > vol_avg * 1.25
+    vol_spike = last["Volume"] > vol_avg * 1.2
 
     rsi_ok = 35 <= last["RSI"] <= 75
 
     range20 = df["High"].rolling(20).max().iloc[-1] - df["Low"].rolling(20).min().iloc[-1]
     compression = (range20 / last["Close"]) < 0.15
 
-    weekly = df.resample("W").last()
-    ma50w = weekly["Close"].rolling(50).mean().iloc[-1]
-    above_ma50w = last["Close"] > ma50w if not np.isnan(ma50w) else True
+    regime, regime_score = detect_regime(df)
 
     # ======================
-    # PROBABILITY MODEL
+    # PROBABILITY
     # ======================
 
     prob = 0
@@ -118,35 +138,36 @@ def analyze(df, ticker):
     prob += 15 if vol_spike else 5
     prob += 15 if compression else 5
     prob += 10 if rsi_ok else 0
-    prob += 10 if above_ma50w else 0
 
     prob += ml_edge(ticker)
+    prob += regime_score
 
     prob = min(100, max(0, prob))
 
     # ======================
-    # SIGNALS (FIXED BALANCE)
+    # SIGNALS (REGIME ADAPTIVE)
     # ======================
 
-    BUY = (
-        prob >= 70
-        and trend
-        and (breakout or vol_spike)
-    )
+    if regime == "TREND_UP":
+        BUY_THRESHOLD = 65
+        SETUP_THRESHOLD = 55
+    elif regime == "CHOP":
+        BUY_THRESHOLD = 75
+        SETUP_THRESHOLD = 65
+    else:
+        BUY_THRESHOLD = 70
+        SETUP_THRESHOLD = 60
 
-    SETUP = (
-        prob >= 60
-        and trend
-    )
+    BUY = prob >= BUY_THRESHOLD and trend and (breakout or vol_spike)
 
-    WATCH = (
-        prob >= 50
-    )
+    SETUP = prob >= SETUP_THRESHOLD
 
-    return prob, BUY, SETUP, WATCH, high20
+    WATCH = prob >= 50
+
+    return prob, BUY, SETUP, WATCH, high20, regime
 
 # ======================
-# LEARNING LOG
+# LOG
 # ======================
 
 def log_ml(ticker, prob, buy, df):
@@ -213,7 +234,7 @@ for t in WATCHLIST[:120]:
     try:
         df = yf.download(t, period="2y", interval="1d", progress=False)
 
-        if df.empty:
+        if df is None or df.empty:
             continue
 
         res = analyze(df, t)
@@ -221,9 +242,9 @@ for t in WATCHLIST[:120]:
         if res is None:
             continue
 
-        prob, buy, setup, watch, high20 = res
+        prob, buy, setup, watch, high20, regime = res
 
-        results.append((t, prob, buy, setup, watch))
+        results.append((t, prob, buy, setup, watch, regime))
 
         log_ml(t, prob, buy, df)
 
@@ -232,7 +253,7 @@ for t in WATCHLIST[:120]:
             if img:
                 charts.append((t, img))
 
-        print(t, "prob:", prob, "buy:", buy, "setup:", setup, "watch:", watch)
+        print(t, "prob:", prob, "buy:", buy, "setup:", setup, "regime:", regime)
 
     except:
         continue
@@ -255,7 +276,7 @@ watch = [r for r in results if r[4]]
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-msg = "📊 PRO ML SCANNER (STABLE)\n\n"
+msg = "📊 MARKET REGIME ML SCANNER\n\n"
 
 msg += "🔥 BUY:\n"
 msg += "None today\n" if not buys else ""
@@ -280,7 +301,7 @@ requests.post(
 )
 
 # ======================
-# SEND CHARTS
+# CHARTS
 # ======================
 
 for t, img in charts[:8]:
