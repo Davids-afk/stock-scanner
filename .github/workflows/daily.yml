@@ -20,13 +20,14 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install yfinance
+           pip install yfinance
           pip install pandas
-          pip install numpy
-          pip install requests
-          pip install matplotlib
-          pip install lxml
-          pip install html5lib
+    pip install numpy
+    pip install requests
+    pip install matplotlib
+    pip install mplfinance
+    pip install lxml
+    pip install html5lib
 
       - name: Run scanner
         env:
