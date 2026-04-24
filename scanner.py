@@ -1,7 +1,7 @@
 import yfinance as yf
-import pandas as pd
 import numpy as np
 import requests
+import os
 
 # ======================
 # CONFIG
@@ -11,7 +11,6 @@ SP500 = ["AAPL","MSFT","NVDA","META","AMZN","GOOGL","BRK-B","LLY","AVGO","TSLA"]
 NASDAQ100 = ["AMD","ADBE","NFLX","INTC","CSCO","PEP","COST","QCOM","TXN","AMGN"]
 
 WATCHLIST = list(set(SP500 + NASDAQ100))
-
 
 # ======================
 # INDICATORS
@@ -30,14 +29,15 @@ def rsi(series, period=14):
 
 def score(df):
     df = df.copy()
+
     df["MA50"] = df["Close"].rolling(50).mean()
     df["MA200"] = df["Close"].rolling(200).mean()
     df["RSI"] = rsi(df["Close"])
 
     last = df.iloc[-1]
 
-    if np.isnan(last["MA50"]) or np.isnan(last["MA200"]):
-        return 0
+    if np.isnan(last["MA50"]) or np.isnan(last["MA200"]) or np.isnan(last["RSI"]):
+        return None
 
     trend = 40 if last["MA50"] > last["MA200"] else 0
     rsi_score = 20 if last["RSI"] > 55 else 10
@@ -57,29 +57,43 @@ results = []
 
 for t in WATCHLIST:
     try:
-        df = yf.download(t, period="1y", interval="1wk")
+        df = yf.download(t, period="1y", interval="1wk", progress=False)
+
+        if df is None or df.empty:
+            print(f"{t} no data")
+            continue
+
         s = score(df)
+
+        if s is None:
+            continue
+
+        print(f"{t} score: {s}")
         results.append((t, s))
-    except:
+
+    except Exception as e:
+        print(f"{t} error: {e}")
         continue
 
-results = sorted(results, key=lambda x: x[1], reverse=True)[:10]
+# sort TOP
+results = sorted(results, key=lambda x: x[1], reverse=True)
+
+top = results[:10]
 
 # ======================
 # TELEGRAM OUTPUT
 # ======================
 
-
-import os
-
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-
 msg = "📊 TOP 10 S&P + NASDAQ\n\n"
 
-for t, s in results:
-    msg += f"{t} — {s}\n"
+if len(top) == 0:
+    msg += "No signals today 📉"
+else:
+    for t, s in top:
+        msg += f"{t} — {s}\n"
 
 url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
