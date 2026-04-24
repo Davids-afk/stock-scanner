@@ -3,7 +3,7 @@ import numpy as np
 import requests
 import os
 import pandas as pd
-import matplotlib.pyplot as plt
+import mplfinance as mpf
 
 # ======================
 # LOAD SYMBOLS
@@ -137,29 +137,53 @@ def analyze(df):
     return score, BUY, WATCH
 
 # ======================
-# CHART CREATION
+# CREATE CANDLE CHART
 # ======================
 
 def create_chart(df, ticker):
+
+    df = df.copy()
 
     df = df.tail(120)
 
     df["MA50"] = df["Close"].rolling(50).mean()
 
-    plt.figure(figsize=(8,4))
+    # WEEKLY MA50
+    weekly = df.resample("W").last()
 
-    plt.plot(df["Close"], label="Price")
-    plt.plot(df["MA50"], label="MA50")
+    weekly["MA50W"] = weekly["Close"].rolling(50).mean()
 
-    plt.title(ticker)
+    weekly_ma50 = weekly["MA50W"].reindex(
+        df.index,
+        method="ffill"
+    )
 
-    plt.legend()
+    df["MA50W"] = weekly_ma50
+
+    breakout = df["High"].rolling(20).max()
+
+    support = df["Low"].rolling(20).min()
+
+    apds = [
+
+        mpf.make_addplot(df["MA50"]),
+        mpf.make_addplot(df["MA50W"]),
+        mpf.make_addplot(breakout, linestyle="--"),
+        mpf.make_addplot(support, linestyle=":"),
+
+    ]
 
     file_name = f"{ticker}.png"
 
-    plt.savefig(file_name)
-
-    plt.close()
+    mpf.plot(
+        df,
+        type="candle",
+        style="yahoo",
+        title=ticker,
+        volume=True,
+        addplot=apds,
+        savefig=file_name
+    )
 
     return file_name
 
@@ -206,13 +230,20 @@ for batch in chunks(WATCHLIST[:200], BATCH_SIZE):
 
                 score, buy, watch = res
 
-                results.append((ticker, score, buy, watch))
+                results.append(
+                    (ticker, score, buy, watch)
+                )
 
                 if buy or watch:
 
-                    chart = create_chart(df, ticker)
+                    chart = create_chart(
+                        df,
+                        ticker
+                    )
 
-                    charts_to_send.append((ticker, chart))
+                    charts_to_send.append(
+                        (ticker, chart)
+                    )
 
             except:
                 continue
@@ -224,7 +255,11 @@ for batch in chunks(WATCHLIST[:200], BATCH_SIZE):
 # SORT
 # ======================
 
-results = sorted(results, key=lambda x: x[1], reverse=True)
+results = sorted(
+    results,
+    key=lambda x: x[1],
+    reverse=True
+)
 
 top = results[:15]
 
@@ -233,7 +268,7 @@ buys = [r for r in results if r[2]]
 watch = [r for r in results if r[3]]
 
 # ======================
-# TELEGRAM TEXT
+# TELEGRAM
 # ======================
 
 TOKEN = os.environ["TELEGRAM_TOKEN"]
@@ -261,7 +296,10 @@ for t, s, _, _ in top:
 
 requests.post(
     f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-    data={"chat_id": CHAT_ID, "text": msg}
+    data={
+        "chat_id": CHAT_ID,
+        "text": msg
+    }
 )
 
 # ======================
@@ -274,8 +312,12 @@ for ticker, chart in charts_to_send[:10]:
 
         requests.post(
             f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
-            data={"chat_id": CHAT_ID},
-            files={"photo": f}
+            data={
+                "chat_id": CHAT_ID
+            },
+            files={
+                "photo": f
+            }
         )
 
 print(msg)
