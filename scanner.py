@@ -9,7 +9,7 @@ import csv
 import os.path
 
 # ======================
-# LEARNING FILE
+# MEMORY (LEARNING)
 # ======================
 
 FILE = "ml_memory.csv"
@@ -17,13 +17,7 @@ FILE = "ml_memory.csv"
 if not os.path.exists(FILE):
     with open(FILE, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow([
-            "date",
-            "ticker",
-            "prob",
-            "buy",
-            "future_return"
-        ])
+        writer.writerow(["date","ticker","prob","buy","future_return"])
 
 # ======================
 # UNIVERSE
@@ -61,7 +55,7 @@ def rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # ======================
-# ML FEATURE: HISTORICAL EDGE
+# LEARNING BOOST
 # ======================
 
 def ml_edge(ticker):
@@ -76,9 +70,7 @@ def ml_edge(ticker):
 
         win_rate = (tdf["future_return"] > 0).mean()
 
-        avg_return = tdf["future_return"].mean()
-
-        return (win_rate - 0.5) * 20 + avg_return * 100
+        return (win_rate - 0.5) * 20
 
     except:
         return 0
@@ -105,51 +97,58 @@ def analyze(df, ticker):
     trend = last["Close"] > last["MA50"]
 
     high20 = df["High"].rolling(20).max().iloc[-2]
-
     breakout = last["Close"] > high20
 
-    vol = df["Volume"].rolling(20).mean().iloc[-1]
-    vol_spike = last["Volume"] > vol * 1.5
+    vol_avg = df["Volume"].rolling(20).mean().iloc[-1]
+    vol_spike = last["Volume"] > vol_avg * 1.3   # פחות קשיח
 
-    rsi_ok = 40 <= last["RSI"] <= 70
+    rsi_ok = 35 <= last["RSI"] <= 75
 
     range20 = df["High"].rolling(20).max().iloc[-1] - df["Low"].rolling(20).min().iloc[-1]
-    compression = (range20 / last["Close"]) < 0.12
+    compression = (range20 / last["Close"]) < 0.15  # פחות קשיח
 
     weekly = df.resample("W").last()
     ma50w = weekly["Close"].rolling(50).mean().iloc[-1]
     above_ma50w = last["Close"] > ma50w if not np.isnan(ma50w) else True
 
     # ======================
-    # BASE PROBABILITY
+    # PROBABILITY MODEL
     # ======================
 
     prob = 0
-    prob += 30 if breakout else int(max(0, (last["Close"] / high20 - 0.95) * 300))
+    prob += 25 if breakout else 10
     prob += 25 if trend else 0
-    prob += 20 if vol_spike else 0
-    prob += 15 if compression else 0
+    prob += 15 if vol_spike else 5
+    prob += 15 if compression else 5
     prob += 10 if rsi_ok else 0
-    prob += 5 if above_ma50w else 0
-
-    # ======================
-    # ML BOOST
-    # ======================
+    prob += 10 if above_ma50w else 0
 
     prob += ml_edge(ticker)
 
     prob = min(100, max(0, prob))
 
-    BUY = prob >= 75 and breakout and vol_spike and trend
-    WATCH = prob >= 55 and compression and trend
+    # ======================
+    # SIGNALS (FIXED BALANCED)
+    # ======================
+
+    BUY = (
+        prob >= 70
+        and trend
+        and (breakout or vol_spike)
+    )
+
+    WATCH = (
+        prob >= 50
+        and trend
+    )
 
     return prob, BUY, WATCH, high20
 
 # ======================
-# LEARNING UPDATE (TRUE PREDICTION FEEDBACK)
+# LEARNING LOG
 # ======================
 
-def log_and_learn(ticker, prob, buy, df):
+def log_ml(ticker, prob, buy, df):
 
     try:
         close_now = df["Close"].iloc[-1]
@@ -226,12 +225,15 @@ for t in WATCHLIST[:120]:
 
         results.append((t, prob, buy, watch))
 
-        log_and_learn(t, prob, buy, df)
+        log_ml(t, prob, buy, df)
 
         if buy or watch:
             img = create_chart(df, t, high20)
             if img:
                 charts.append((t, img))
+
+        # DEBUG חשוב
+        print(t, "prob:", prob, "buy:", buy, "watch:", watch)
 
     except:
         continue
@@ -253,7 +255,7 @@ watch = [r for r in results if r[3]]
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-msg = "📊 PREDICTIVE ML SCANNER\n\n"
+msg = "📊 FIXED ML SCANNER\n\n"
 
 msg += "🔥 BUY:\n"
 msg += "None today\n" if not buys else ""
