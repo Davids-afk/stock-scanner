@@ -10,31 +10,34 @@ import matplotlib.pyplot as plt
 # ======================
 
 def load_sp500():
+    try:
+        table = pd.read_html(
+            "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+        )[0]
 
-    table = pd.read_html(
-        "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    )[0]
+        symbols = table["Symbol"].tolist()
+        symbols = [s.replace(".", "-") for s in symbols]
 
-    symbols = table["Symbol"].tolist()
-    symbols = [s.replace(".", "-") for s in symbols]
+        return symbols
 
-    return symbols
+    except:
+        return ["AAPL","MSFT","NVDA","AMZN","GOOGL"]
 
 
 def load_nasdaq100():
+    try:
+        tables = pd.read_html(
+            "https://en.wikipedia.org/wiki/Nasdaq-100"
+        )
 
-    tables = pd.read_html(
-        "https://en.wikipedia.org/wiki/Nasdaq-100"
-    )
+        for t in tables:
+            if "Ticker" in t.columns:
+                symbols = t["Ticker"].tolist()
+                symbols = [s.replace(".", "-") for s in symbols]
+                return symbols
 
-    for t in tables:
-
-        if "Ticker" in t.columns:
-
-            symbols = t["Ticker"].tolist()
-            symbols = [s.replace(".", "-") for s in symbols]
-
-            return symbols
+    except:
+        return ["AMD","ADBE","NFLX"]
 
 
 SP500 = load_sp500()
@@ -61,94 +64,120 @@ def rsi(series, period=14):
 
 
 # ======================
-# STRATEGIES
+# STRATEGY 1
+# TREND PULLBACK
 # ======================
 
 def strategy_pullback(df):
 
-    monthly = df.resample("M").last()
-    weekly = df.resample("W").last()
+    try:
 
-    monthly["MA10"] = monthly["Close"].rolling(10).mean()
-    weekly["MA50"] = weekly["Close"].rolling(50).mean()
+        monthly = df.resample("M").last()
+        weekly = df.resample("W").last()
 
-    df["MA20"] = df["Close"].rolling(20).mean()
-    df["MA50"] = df["Close"].rolling(50).mean()
+        monthly["MA10"] = monthly["Close"].rolling(10).mean()
+        weekly["MA50"] = weekly["Close"].rolling(50).mean()
 
-    df["RSI"] = rsi(df["Close"])
+        df["MA20"] = df["Close"].rolling(20).mean()
+        df["MA50"] = df["Close"].rolling(50).mean()
 
-    if len(monthly) < 12:
+        df["RSI"] = rsi(df["Close"])
+
+        if len(monthly) < 12:
+            return None
+
+        last_m = monthly.iloc[-1]
+        last_w = weekly.iloc[-1]
+        last = df.iloc[-1]
+
+        cond = (
+            last_m["Close"] > last_m["MA10"]
+            and last_w["Close"] > last_w["MA50"]
+            and abs(last["Close"] - last["MA20"]) / last["MA20"] < 0.03
+            and 40 <= last["RSI"] <= 55
+        )
+
+        if cond:
+
+            entry = last["Close"]
+            stop = last["MA50"]
+            target = entry * 1.10
+
+            return entry, stop, target
+
         return None
 
-    last_m = monthly.iloc[-1]
-    last_w = weekly.iloc[-1]
-    last = df.iloc[-1]
+    except:
+        return None
 
-    cond = (
-        last_m["Close"] > last_m["MA10"]
-        and last_w["Close"] > last_w["MA50"]
-        and abs(last["Close"] - last["MA20"]) / last["MA20"] < 0.03
-        and 40 <= last["RSI"] <= 55
-    )
 
-    if cond:
-
-        entry = last["Close"]
-        stop = last["MA50"]
-        target = entry * 1.10
-
-        return entry, stop, target
-
-    return None
-
+# ======================
+# STRATEGY 2
+# BREAKOUT
+# ======================
 
 def strategy_breakout(df):
 
-    df["VOL_AVG"] = df["Volume"].rolling(20).mean()
+    try:
 
-    high20 = df["High"].rolling(20).max().iloc[-2]
+        df["VOL_AVG"] = df["Volume"].rolling(20).mean()
 
-    last = df.iloc[-1]
+        high20 = df["High"].rolling(20).max().iloc[-2]
 
-    cond = (
-        last["Close"] > high20
-        and last["Volume"] > last["VOL_AVG"]
-    )
+        last = df.iloc[-1]
 
-    if cond:
+        cond = (
+            last["Close"] > high20
+            and last["Volume"] > last["VOL_AVG"]
+        )
 
-        entry = high20 * 1.002
-        stop = high20 * 0.98
-        target = entry * 1.12
+        if cond:
 
-        return entry, stop, target
+            entry = high20 * 1.002
+            stop = high20 * 0.98
+            target = entry * 1.12
 
-    return None
+            return entry, stop, target
 
+        return None
+
+    except:
+        return None
+
+
+# ======================
+# STRATEGY 3
+# MOMENTUM
+# ======================
 
 def strategy_momentum(df):
 
-    df["EMA8"] = df["Close"].ewm(span=8).mean()
-    df["EMA21"] = df["Close"].ewm(span=21).mean()
+    try:
 
-    df["RSI"] = rsi(df["Close"])
+        df["EMA8"] = df["Close"].ewm(span=8).mean()
+        df["EMA21"] = df["Close"].ewm(span=21).mean()
 
-    last = df.iloc[-1]
+        df["RSI"] = rsi(df["Close"])
 
-    cond = (
-        last["EMA8"] > last["EMA21"]
-        and 50 <= last["RSI"] <= 70
-    )
+        last = df.iloc[-1]
 
-    if cond:
+        cond = (
+            last["EMA8"] > last["EMA21"]
+            and 50 <= last["RSI"] <= 70
+        )
 
-        entry = last["Close"]
-        stop = last["EMA21"]
-        target = entry * 1.10
+        if cond:
 
-        return entry, stop, target
+            entry = last["Close"]
+            stop = last["EMA21"]
+            target = entry * 1.10
 
-    return None
+            return entry, stop, target
+
+        return None
+
+    except:
+        return None
 
 
 # ======================
@@ -157,32 +186,37 @@ def strategy_momentum(df):
 
 def create_chart(df, ticker, entry, stop, target):
 
-    df = df.tail(120)
+    try:
 
-    df["MA20"] = df["Close"].rolling(20).mean()
-    df["MA50"] = df["Close"].rolling(50).mean()
+        df = df.tail(120)
 
-    plt.figure(figsize=(9,4))
+        df["MA20"] = df["Close"].rolling(20).mean()
+        df["MA50"] = df["Close"].rolling(50).mean()
 
-    plt.plot(df["Close"], label="Price")
-    plt.plot(df["MA20"], label="MA20")
-    plt.plot(df["MA50"], label="MA50")
+        plt.figure(figsize=(9,4))
 
-    plt.axhline(entry, linestyle="--", label="Entry")
-    plt.axhline(stop, linestyle="--", label="Stop")
-    plt.axhline(target, linestyle="--", label="Target")
+        plt.plot(df["Close"], label="Price")
+        plt.plot(df["MA20"], label="MA20")
+        plt.plot(df["MA50"], label="MA50")
 
-    plt.title(ticker)
+        plt.axhline(entry, linestyle="--", label="Entry")
+        plt.axhline(stop, linestyle="--", label="Stop")
+        plt.axhline(target, linestyle="--", label="Target")
 
-    plt.legend()
+        plt.title(ticker)
 
-    file_name = f"{ticker}.png"
+        plt.legend()
 
-    plt.savefig(file_name)
+        file_name = f"{ticker}.png"
 
-    plt.close()
+        plt.savefig(file_name)
 
-    return file_name
+        plt.close()
+
+        return file_name
+
+    except:
+        return None
 
 
 # ======================
@@ -197,6 +231,8 @@ charts = []
 
 for ticker in WATCHLIST[:200]:
 
+    print("Scanning:", ticker)
+
     try:
 
         df = yf.download(
@@ -209,65 +245,44 @@ for ticker in WATCHLIST[:200]:
         if df.empty:
             continue
 
+        df.index = pd.to_datetime(df.index)
+
         res1 = strategy_pullback(df)
         res2 = strategy_breakout(df)
         res3 = strategy_momentum(df)
 
+        result = None
+
         if res1:
-
-            entry, stop, target = res1
-
-            pullback_list.append(
-                (ticker, entry, stop, target)
-            )
-
-            charts.append(
-                create_chart(
-                    df,
-                    ticker,
-                    entry,
-                    stop,
-                    target
-                )
-            )
+            result = res1
+            pullback_list.append((ticker, *res1))
 
         elif res2:
-
-            entry, stop, target = res2
-
-            breakout_list.append(
-                (ticker, entry, stop, target)
-            )
-
-            charts.append(
-                create_chart(
-                    df,
-                    ticker,
-                    entry,
-                    stop,
-                    target
-                )
-            )
+            result = res2
+            breakout_list.append((ticker, *res2))
 
         elif res3:
+            result = res3
+            momentum_list.append((ticker, *res3))
 
-            entry, stop, target = res3
+        if result:
 
-            momentum_list.append(
-                (ticker, entry, stop, target)
+            entry, stop, target = result
+
+            chart = create_chart(
+                df,
+                ticker,
+                entry,
+                stop,
+                target
             )
 
-            charts.append(
-                create_chart(
-                    df,
-                    ticker,
-                    entry,
-                    stop,
-                    target
-                )
-            )
+            if chart:
+                charts.append(chart)
 
-    except:
+    except Exception as e:
+
+        print("ERROR:", ticker, e)
 
         continue
 
@@ -285,6 +300,10 @@ def format_block(title, lst):
 
     text = title + "\n"
 
+    if len(lst) == 0:
+        text += "None\n\n"
+        return text
+
     for t, e, s, tp in lst[:5]:
 
         text += (
@@ -297,20 +316,9 @@ def format_block(title, lst):
     return text
 
 
-msg += format_block(
-    "🥇 Pullback",
-    pullback_list
-)
-
-msg += format_block(
-    "🥈 Breakout",
-    breakout_list
-)
-
-msg += format_block(
-    "🥉 Momentum",
-    momentum_list
-)
+msg += format_block("🥇 Pullback", pullback_list)
+msg += format_block("🥈 Breakout", breakout_list)
+msg += format_block("🥉 Momentum", momentum_list)
 
 requests.post(
     f"https://api.telegram.org/bot{TOKEN}/sendMessage",
@@ -326,12 +334,18 @@ requests.post(
 
 for chart in charts[:10]:
 
-    with open(chart, "rb") as f:
+    try:
 
-        requests.post(
-            f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
-            data={"chat_id": CHAT_ID},
-            files={"photo": f}
-        )
+        with open(chart, "rb") as f:
+
+            requests.post(
+                f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
+                data={"chat_id": CHAT_ID},
+                files={"photo": f}
+            )
+
+    except:
+        continue
+
 
 print(msg)
