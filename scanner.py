@@ -10,40 +10,26 @@ import matplotlib.pyplot as plt
 # ======================
 
 def load_sp500():
-    try:
-        table = pd.read_html(
-            "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        )[0]
+    table = pd.read_html(
+        "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    )[0]
 
-        symbols = table["Symbol"].tolist()
-        symbols = [s.replace(".", "-") for s in symbols]
-
-        return symbols
-
-    except:
-        return ["AAPL","MSFT","NVDA","AMZN","GOOGL"]
+    return [s.replace(".", "-") for s in table["Symbol"].tolist()]
 
 
 def load_nasdaq100():
-    try:
-        tables = pd.read_html(
-            "https://en.wikipedia.org/wiki/Nasdaq-100"
-        )
+    tables = pd.read_html(
+        "https://en.wikipedia.org/wiki/Nasdaq-100"
+    )
 
-        for t in tables:
-            if "Ticker" in t.columns:
-                symbols = t["Ticker"].tolist()
-                symbols = [s.replace(".", "-") for s in symbols]
-                return symbols
+    for t in tables:
+        if "Ticker" in t.columns:
+            return [s.replace(".", "-") for s in t["Ticker"].tolist()]
 
-    except:
-        return ["AMD","ADBE","NFLX"]
+    return []
 
 
-SP500 = load_sp500()
-NASDAQ100 = load_nasdaq100()
-
-WATCHLIST = list(set(SP500 + NASDAQ100))
+WATCHLIST = list(set(load_sp500() + load_nasdaq100()))
 
 print("TOTAL SYMBOLS:", len(WATCHLIST))
 
@@ -52,183 +38,117 @@ print("TOTAL SYMBOLS:", len(WATCHLIST))
 # ======================
 
 def rsi(series, period=14):
-
     delta = series.diff()
-
     gain = delta.clip(lower=0).rolling(period).mean()
     loss = (-delta.clip(upper=0)).rolling(period).mean()
-
     rs = gain / loss
-
     return 100 - (100 / (1 + rs))
 
-
 # ======================
-# WEEKLY MA50 FIXED
+# WEEKLY TREND
 # ======================
 
-def weekly_ma50(df):
+def weekly_trend(df):
+    weekly = df.resample("W").last()
+    weekly["MA50"] = weekly["Close"].rolling(50).mean()
 
-    try:
+    last = weekly.iloc[-1]
 
-        weekly = yf.download(
-            df.name,
-            period="5y",
-            interval="1wk",
-            progress=False
-        )
-
-        weekly["MA50W"] = (
-            weekly["Close"]
-            .rolling(50)
-            .mean()
-        )
-
-        last = weekly.iloc[-1]
-
-        if np.isnan(last["MA50W"]):
-            return False
-
-        return last["Close"] > last["MA50W"]
-
-    except:
-
+    if np.isnan(last["MA50"]):
         return False
 
+    return last["Close"] > last["MA50"]
 
 # ======================
-# ANALYZE
+# SCORING ENGINE
 # ======================
 
-def analyze(df, ticker):
+def score_stock(df):
 
-    try:
+    df["MA20"] = df["Close"].rolling(20).mean()
+    df["MA50"] = df["Close"].rolling(50).mean()
+    df["EMA8"] = df["Close"].ewm(span=8).mean()
+    df["EMA21"] = df["Close"].ewm(span=21).mean()
+    df["RSI"] = rsi(df["Close"])
+    df["VOL_AVG"] = df["Volume"].rolling(20).mean()
 
-        df["MA20"] = df["Close"].rolling(20).mean()
-        df["MA50"] = df["Close"].rolling(50).mean()
+    last = df.iloc[-1]
 
-        df["EMA8"] = df["Close"].ewm(span=8).mean()
-        df["EMA21"] = df["Close"].ewm(span=21).mean()
+    score = 0
 
-        df["RSI"] = rsi(df["Close"])
+    # Trend
+    if weekly_trend(df):
+        score += 25
 
-        df["VOL_AVG"] = (
-            df["Volume"]
-            .rolling(20)
-            .mean()
-        )
+    if last["Close"] > last["MA20"]:
+        score += 10
 
-        last = df.iloc[-1]
+    # Momentum
+    if last["EMA8"] > last["EMA21"]:
+        score += 20
 
-        # WEEKLY TREND
+    # RSI healthy
+    if 40 <= last["RSI"] <= 70:
+        score += 15
 
-        weekly_ok = weekly_ma50(df)
+    # Volume
+    if last["Volume"] > last["VOL_AVG"]:
+        score += 10
 
-        # PULLBACK
+    # Pullback proximity
+    dist = abs(last["Close"] - last["MA20"]) / last["MA20"]
+    if dist < 0.05:
+        score += 20
 
-        near_ma20 = (
-            abs(last["Close"] - last["MA20"])
-            / last["MA20"]
-            < 0.05
-        )
+    return score
 
-        rsi_pullback = (
-            35 <= last["RSI"] <= 60
-        )
+# ======================
+# STRATEGY LEVEL
+# ======================
 
-        pullback = (
-            weekly_ok
-            and near_ma20
-            and rsi_pullback
-        )
-
-        # BREAKOUT
-
-        high20 = (
-            df["High"]
-            .rolling(20)
-            .max()
-            .iloc[-2]
-        )
-
-        breakout = (
-            last["Close"] > high20
-            and last["Volume"]
-            > last["VOL_AVG"]
-        )
-
-        # MOMENTUM
-
-        momentum = (
-            last["EMA8"] > last["EMA21"]
-            and last["RSI"] > 50
-        )
-
-        if pullback or breakout or momentum:
-
-            entry = last["Close"]
-
-            stop = last["MA50"]
-
-            target = entry * 1.10
-
-            return entry, stop, target
-
-        return None
-
-    except:
-
-        return None
-
+def classify(score):
+    if score >= 80:
+        return "A"
+    elif score >= 60:
+        return "B"
+    return None
 
 # ======================
 # CHART
 # ======================
 
-def create_chart(df, ticker, entry, stop, target):
+def create_chart(df, ticker, entry):
 
-    try:
+    df = df.tail(120)
 
-        df = df.tail(120)
+    df["MA20"] = df["Close"].rolling(20).mean()
 
-        df["MA20"] = df["Close"].rolling(20).mean()
-        df["MA50"] = df["Close"].rolling(50).mean()
+    plt.figure(figsize=(9,4))
 
-        plt.figure(figsize=(9,4))
+    plt.plot(df["Close"])
+    plt.plot(df["MA20"])
 
-        plt.plot(df["Close"])
-        plt.plot(df["MA20"])
-        plt.plot(df["MA50"])
+    plt.axhline(entry)
 
-        plt.axhline(entry)
-        plt.axhline(stop)
-        plt.axhline(target)
+    plt.title(ticker)
 
-        plt.title(ticker)
+    file = f"{ticker}.png"
 
-        file_name = f"{ticker}.png"
+    plt.savefig(file)
 
-        plt.savefig(file_name)
+    plt.close()
 
-        plt.close()
-
-        return file_name
-
-    except:
-
-        return None
-
+    return file
 
 # ======================
-# MAIN
+# SCAN
 # ======================
 
-results = []
+A_setups = []
+B_setups = []
 charts = []
 
-for ticker in WATCHLIST[:300]:
-
-    print("Scanning:", ticker)
+for ticker in WATCHLIST[:250]:
 
     try:
 
@@ -242,33 +162,26 @@ for ticker in WATCHLIST[:300]:
         if df.empty:
             continue
 
-        df.name = ticker
+        s = score_stock(df)
+        level = classify(s)
 
-        res = analyze(df, ticker)
+        if level is None:
+            continue
 
-        if res:
+        entry = df["Close"].iloc[-1]
+        stop = df["MA20"].iloc[-1]
+        target = entry * 1.10
 
-            entry, stop, target = res
+        if level == "A":
+            A_setups.append((ticker, s, entry, stop, target))
+        else:
+            B_setups.append((ticker, s, entry, stop, target))
 
-            results.append(
-                (ticker, entry, stop, target)
-            )
-
-            chart = create_chart(
-                df,
-                ticker,
-                entry,
-                stop,
-                target
-            )
-
-            if chart:
-                charts.append(chart)
+        chart = create_chart(df, ticker, entry)
+        charts.append(chart)
 
     except:
-
         continue
-
 
 # ======================
 # TELEGRAM
@@ -277,47 +190,36 @@ for ticker in WATCHLIST[:300]:
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-msg = "📊 STABLE SWING SCANNER\n\n"
+msg = "📊 SWING SCANNER (A / B SYSTEM)\n\n"
 
-if len(results) == 0:
-
-    msg += "No signals today"
-
+msg += "🟣 A SETUPS\n"
+if not A_setups:
+    msg += "None\n\n"
 else:
+    for t, s, e, st, tp in A_setups[:10]:
+        msg += f"{t} — {s}\nEntry {e:.2f}\n\n"
 
-    for t, e, s, tp in results[:10]:
-
-        msg += (
-            f"{t}\n"
-            f"Entry: {e:.2f}\n"
-            f"Stop: {s:.2f}\n"
-            f"Target: {tp:.2f}\n\n"
-        )
-
+msg += "🟡 B SETUPS\n"
+if not B_setups:
+    msg += "None\n\n"
+else:
+    for t, s, e, st, tp in B_setups[:10]:
+        msg += f"{t} — {s}\nEntry {e:.2f}\n\n"
 
 requests.post(
     f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-    data={
-        "chat_id": CHAT_ID,
-        "text": msg
-    }
+    data={"chat_id": CHAT_ID, "text": msg}
 )
 
-for chart in charts[:10]:
-
+for c in charts[:10]:
     try:
-
-        with open(chart, "rb") as f:
-
+        with open(c, "rb") as f:
             requests.post(
                 f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
                 data={"chat_id": CHAT_ID},
                 files={"photo": f}
             )
-
     except:
-
         continue
-
 
 print(msg)
