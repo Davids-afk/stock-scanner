@@ -1,10 +1,9 @@
 import yfinance as yf
 import pandas as pd
-import numpy as np
 import requests
 import os
 
-print("📊 ROBUST TWO LAYER SWING SCANNER")
+print("📊 SIMPLE MA50 WEEKLY SCANNER")
 
 # ======================
 # UNIVERSE
@@ -36,25 +35,17 @@ def load_universe():
 
 WATCHLIST = load_universe()
 
-print("TOTAL:", len(WATCHLIST))
+print("TOTAL STOCKS:", len(WATCHLIST))
 
 # ======================
-# RSI
+# RESULT
 # ======================
 
-def rsi(series, period=14):
-    delta = series.diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = (-delta.clip(upper=0)).rolling(period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+results = []
 
 # ======================
-# SCANNER
+# SCAN
 # ======================
-
-BASE = []
-HEDGE = []
 
 for ticker in WATCHLIST:
 
@@ -62,68 +53,35 @@ for ticker in WATCHLIST:
 
         df = yf.download(
             ticker,
-            period="2y",
+            period="3y",
             interval="1d",
             progress=False
         )
 
-        if df.empty or len(df) < 100:
+        if df.empty or len(df) < 200:
             continue
 
-        df = df.dropna()
+        df.index = pd.to_datetime(df.index)
 
-        # indicators
-        df["EMA8"] = df["Close"].ewm(span=8).mean()
-        df["EMA21"] = df["Close"].ewm(span=21).mean()
-        df["MA50"] = df["Close"].rolling(50).mean()
-        df["RSI"] = rsi(df["Close"])
-        df["VOL_AVG"] = df["Volume"].rolling(20).mean()
+        # weekly data
+        weekly = df.resample("W").last()
 
-        df = df.dropna()
+        weekly["MA50W"] = weekly["Close"].rolling(50).mean()
 
-        if len(df) < 60:
+        weekly = weekly.dropna()
+
+        if weekly.empty:
             continue
 
-        recent = df.tail(5)
+        last = weekly.iloc[-1]
 
-        ma50 = df["MA50"].iloc[-1]
+        price = float(last["Close"])
+        ma50w = float(last["MA50W"])
 
-        if pd.isna(ma50):
-            continue
+        # ✅ ONLY CONDITION
+        if price > ma50w:
 
-        # ======================
-        # 🟢 BASE (5-day logic)
-        # ======================
-
-        base_hits = 0
-
-        for i in range(len(recent)):
-
-            price = recent["Close"].iloc[i]
-
-            dist = (price - ma50) / ma50 * 100
-
-            if price > ma50 and dist <= 20:
-                base_hits += 1
-
-        if base_hits >= 2:
-            BASE.append((ticker, df["Close"].iloc[-1], base_hits))
-
-        # ======================
-        # 🔵 HEDGE (trend consistency)
-        # ======================
-
-        ema_hits = 0
-
-        for i in range(len(recent)):
-
-            if recent["EMA8"].iloc[i] > recent["EMA21"].iloc[i]:
-                ema_hits += 1
-
-        rsi_ok = 45 <= df["RSI"].iloc[-1] <= 70
-
-        if ema_hits >= 3 and rsi_ok:
-            HEDGE.append((ticker, df["Close"].iloc[-1], ema_hits))
+            results.append((ticker, price, ma50w))
 
     except:
         continue
@@ -132,26 +90,29 @@ for ticker in WATCHLIST:
 # SORT
 # ======================
 
-BASE = sorted(BASE, key=lambda x: x[2], reverse=True)
-HEDGE = sorted(HEDGE, key=lambda x: x[2], reverse=True)
+results = sorted(results, key=lambda x: (x[1]-x[2]), reverse=True)
 
 # ======================
 # OUTPUT
 # ======================
 
-msg = "📊 ROBUST TWO LAYER SCANNER\n\n"
+msg = "📊 MA50 WEEKLY ABOVE SCANNER\n\n"
 
-msg += "🟢 BASE SETUPS\n"
-msg += "\n".join(
-    [f"{t} | {p:.2f}" for t,p,_ in BASE[:20]]
-) or "None"
+if results:
 
-msg += "\n\n🔵 HEDGE SETUPS\n"
-msg += "\n".join(
-    [f"{t} | {p:.2f}" for t,p,_ in HEDGE[:20]]
-) or "None"
+    for t, p, m in results[:50]:
+
+        msg += f"{t} | Price {p:.2f} | MA50W {m:.2f}\n"
+
+else:
+
+    msg += "❌ NO RESULTS"
 
 print(msg)
+
+# ======================
+# TELEGRAM
+# ======================
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -160,7 +121,10 @@ if TOKEN and CHAT_ID:
 
     requests.post(
         f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-        data={"chat_id": CHAT_ID, "text": msg}
+        data={
+            "chat_id": CHAT_ID,
+            "text": msg
+        }
     )
 
 print("DONE")
