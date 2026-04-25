@@ -4,35 +4,24 @@ import numpy as np
 import requests
 import os
 import matplotlib.pyplot as plt
-import traceback
 
 # ======================
-# LOAD SYMBOLS
+# SYMBOLS
 # ======================
 
 def load_sp500():
-    try:
-        table = pd.read_html(
-            "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        )[0]
-        return [s.replace(".", "-") for s in table["Symbol"].tolist()]
-    except:
-        return ["AAPL","MSFT","NVDA","AMZN","GOOGL"]
-
+    return pd.read_html(
+        "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    )[0]["Symbol"].str.replace(".", "-").tolist()
 
 def load_nasdaq100():
-    try:
-        tables = pd.read_html("https://en.wikipedia.org/wiki/Nasdaq-100")
-        for t in tables:
-            if "Ticker" in t.columns:
-                return [s.replace(".", "-") for s in t["Ticker"].tolist()]
-    except:
-        return ["AMD","ADBE","NFLX"]
-
+    tables = pd.read_html("https://en.wikipedia.org/wiki/Nasdaq-100")
+    for t in tables:
+        if "Ticker" in t.columns:
+            return t["Ticker"].str.replace(".", "-").tolist()
+    return []
 
 WATCHLIST = list(set(load_sp500() + load_nasdaq100()))
-
-print("TOTAL SYMBOLS:", len(WATCHLIST))
 
 # ======================
 # RSI
@@ -46,32 +35,24 @@ def rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # ======================
-# WEEKLY TREND SAFE
+# WEEKLY TREND (soft)
 # ======================
 
 def weekly_trend(df):
     try:
-        weekly = df.resample("W").last()
-
-        if len(weekly) < 60:
+        w = df.resample("W").last()
+        ma = w["Close"].rolling(50).mean()
+        if len(ma.dropna()) < 10:
             return False
-
-        weekly["MA50"] = weekly["Close"].rolling(50).mean()
-        last = weekly.iloc[-1]
-
-        if np.isnan(last["MA50"]):
-            return False
-
-        return last["Close"] > last["MA50"]
-
+        return w["Close"].iloc[-1] > ma.iloc[-1]
     except:
         return False
 
 # ======================
-# SCORE ENGINE
+# SCORE (SOFTENED)
 # ======================
 
-def score_stock(df):
+def score(df):
 
     df = df.copy()
 
@@ -83,115 +64,68 @@ def score_stock(df):
 
     last = df.iloc[-1]
 
-    score = 0
+    s = 0
 
     if weekly_trend(df):
-        score += 25
+        s += 20
 
     if last["Close"] > last["MA20"]:
-        score += 15
+        s += 15
 
     if last["EMA8"] > last["EMA21"]:
-        score += 20
+        s += 20
 
-    if 40 <= last["RSI"] <= 70:
-        score += 15
+    if 35 <= last["RSI"] <= 75:
+        s += 15
 
     if last["Volume"] > last["VOL_AVG"]:
-        score += 10
+        s += 10
 
     dist = abs(last["Close"] - last["MA20"]) / last["MA20"]
-    if dist < 0.05:
-        score += 15
+    if dist < 0.08:
+        s += 20
 
-    return score
+    return s
 
 # ======================
-# CLASSIFY
+# CLASSIFICATION (FIXED)
 # ======================
 
-def classify(score):
-    if score >= 80:
+def classify(s):
+    if s >= 75:
         return "A"
-    elif score >= 60:
+    elif s >= 55:
         return "B"
+    elif s >= 45:
+        return "WATCH"
     return None
 
 # ======================
-# CHART
+# MAIN
 # ======================
 
-def create_chart(df, ticker, entry):
+A, B, W = [], [], []
+
+for t in WATCHLIST[:300]:
 
     try:
-        df = df.tail(120)
+        df = yf.download(t, period="2y", interval="1d", progress=False)
+        if df.empty:
+            continue
 
-        df["MA20"] = df["Close"].rolling(20).mean()
-        df["MA50"] = df["Close"].rolling(50).mean()
+        sc = score(df)
+        lvl = classify(sc)
 
-        plt.figure(figsize=(9,4))
-        plt.plot(df["Close"])
-        plt.plot(df["MA20"])
-        plt.plot(df["MA50"])
+        price = df["Close"].iloc[-1]
 
-        plt.axhline(entry)
-
-        plt.title(ticker)
-
-        file = f"{ticker}.png"
-        plt.savefig(file)
-        plt.close()
-
-        return file
+        if lvl == "A":
+            A.append((t, sc, price))
+        elif lvl == "B":
+            B.append((t, sc, price))
+        elif lvl == "WATCH":
+            W.append((t, sc, price))
 
     except:
-        return None
-
-# ======================
-# MAIN SCAN (SAFE)
-# ======================
-
-A_setups = []
-B_setups = []
-charts = []
-
-for ticker in WATCHLIST[:250]:
-
-    try:
-        df = yf.download(
-            ticker,
-            period="2y",
-            interval="1d",
-            progress=False
-        )
-
-        if df is None or df.empty:
-            continue
-
-        df = df.dropna()
-
-        score = score_stock(df)
-        level = classify(score)
-
-        if level is None:
-            continue
-
-        entry = float(df["Close"].iloc[-1])
-        stop = float(df["Close"].rolling(20).mean().iloc[-1])
-        target = entry * 1.10
-
-        if level == "A":
-            A_setups.append((ticker, score, entry, stop, target))
-        else:
-            B_setups.append((ticker, score, entry, stop, target))
-
-        chart = create_chart(df, ticker, entry)
-        if chart:
-            charts.append(chart)
-
-    except Exception as e:
-        print("ERROR:", ticker)
-        print(traceback.format_exc())
         continue
 
 # ======================
@@ -201,36 +135,20 @@ for ticker in WATCHLIST[:250]:
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-msg = "📊 SWING SCANNER A/B\n\n"
+msg = "📊 SWING SCANNER (FIXED)\n\n"
 
 msg += "🟣 A SETUPS\n"
-if not A_setups:
-    msg += "None\n\n"
-else:
-    for t, s, e, st, tp in A_setups[:10]:
-        msg += f"{t} | Score {s}\nEntry {e:.2f}\n\n"
+msg += "\n".join([f"{t} | {s}" for t,s,p in A[:10]]) or "None"
 
-msg += "🟡 B SETUPS\n"
-if not B_setups:
-    msg += "None\n\n"
-else:
-    for t, s, e, st, tp in B_setups[:10]:
-        msg += f"{t} | Score {s}\nEntry {e:.2f}\n\n"
+msg += "\n\n🟡 B SETUPS\n"
+msg += "\n".join([f"{t} | {s}" for t,s,p in B[:10]]) or "None"
+
+msg += "\n\n🟢 WATCH\n"
+msg += "\n".join([f"{t} | {s}" for t,s,p in W[:10]]) or "None"
 
 requests.post(
     f"https://api.telegram.org/bot{TOKEN}/sendMessage",
     data={"chat_id": CHAT_ID, "text": msg}
 )
-
-for c in charts[:10]:
-    try:
-        with open(c, "rb") as f:
-            requests.post(
-                f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
-                data={"chat_id": CHAT_ID},
-                files={"photo": f}
-            )
-    except:
-        continue
 
 print(msg)
