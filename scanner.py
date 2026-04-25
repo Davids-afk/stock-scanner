@@ -3,25 +3,40 @@ import pandas as pd
 import numpy as np
 import requests
 import os
-import matplotlib.pyplot as plt
+import traceback
+
+# ======================
+# DEBUG MODE (IMPORTANT)
+# ======================
+
+def log_error(ticker, e):
+    print(f"\n❌ ERROR IN: {ticker}")
+    print(traceback.format_exc())
 
 # ======================
 # SYMBOLS
 # ======================
 
 def load_sp500():
-    return pd.read_html(
-        "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    )[0]["Symbol"].str.replace(".", "-").tolist()
+    try:
+        return pd.read_html(
+            "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+        )[0]["Symbol"].str.replace(".", "-").tolist()
+    except:
+        return ["AAPL","MSFT","NVDA","AMZN","GOOGL"]
 
 def load_nasdaq100():
-    tables = pd.read_html("https://en.wikipedia.org/wiki/Nasdaq-100")
-    for t in tables:
-        if "Ticker" in t.columns:
-            return t["Ticker"].str.replace(".", "-").tolist()
-    return []
+    try:
+        tables = pd.read_html("https://en.wikipedia.org/wiki/Nasdaq-100")
+        for t in tables:
+            if "Ticker" in t.columns:
+                return t["Ticker"].str.replace(".", "-").tolist()
+    except:
+        return ["AMD","ADBE","NFLX"]
 
 WATCHLIST = list(set(load_sp500() + load_nasdaq100()))
+
+print("TOTAL SYMBOLS:", len(WATCHLIST))
 
 # ======================
 # RSI
@@ -35,7 +50,7 @@ def rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # ======================
-# WEEKLY TREND (soft)
+# SAFE WEEKLY CHECK
 # ======================
 
 def weekly_trend(df):
@@ -49,7 +64,7 @@ def weekly_trend(df):
         return False
 
 # ======================
-# SCORE (SOFTENED)
+# SCORE
 # ======================
 
 def score(df):
@@ -66,29 +81,33 @@ def score(df):
 
     s = 0
 
-    if weekly_trend(df):
-        s += 20
+    try:
+        if weekly_trend(df):
+            s += 20
 
-    if last["Close"] > last["MA20"]:
-        s += 15
+        if last["Close"] > last["MA20"]:
+            s += 15
 
-    if last["EMA8"] > last["EMA21"]:
-        s += 20
+        if last["EMA8"] > last["EMA21"]:
+            s += 20
 
-    if 35 <= last["RSI"] <= 75:
-        s += 15
+        if 35 <= last["RSI"] <= 75:
+            s += 15
 
-    if last["Volume"] > last["VOL_AVG"]:
-        s += 10
+        if last["Volume"] > last["VOL_AVG"]:
+            s += 10
 
-    dist = abs(last["Close"] - last["MA20"]) / last["MA20"]
-    if dist < 0.08:
-        s += 20
+        dist = abs(last["Close"] - last["MA20"]) / last["MA20"]
+        if dist < 0.08:
+            s += 20
+
+    except:
+        return 0
 
     return s
 
 # ======================
-# CLASSIFICATION (FIXED)
+# CLASSIFY
 # ======================
 
 def classify(s):
@@ -101,54 +120,65 @@ def classify(s):
     return None
 
 # ======================
-# MAIN
+# MAIN SAFE LOOP
 # ======================
 
 A, B, W = [], [], []
 
-for t in WATCHLIST[:300]:
+for ticker in WATCHLIST[:250]:
 
     try:
-        df = yf.download(t, period="2y", interval="1d", progress=False)
-        if df.empty:
+
+        df = yf.download(
+            ticker,
+            period="2y",
+            interval="1d",
+            progress=False
+        )
+
+        if df is None or df.empty:
             continue
 
-        sc = score(df)
-        lvl = classify(sc)
+        df = df.dropna()
 
-        price = df["Close"].iloc[-1]
+        if len(df) < 100:
+            continue
+
+        s = score(df)
+        lvl = classify(s)
+
+        price = float(df["Close"].iloc[-1])
 
         if lvl == "A":
-            A.append((t, sc, price))
+            A.append((ticker, s, price))
         elif lvl == "B":
-            B.append((t, sc, price))
+            B.append((ticker, s, price))
         elif lvl == "WATCH":
-            W.append((t, sc, price))
+            W.append((ticker, s, price))
 
-    except:
+    except Exception as e:
+        log_error(ticker, e)
         continue
 
 # ======================
 # TELEGRAM
 # ======================
 
-TOKEN = os.environ["TELEGRAM_TOKEN"]
-CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+TOKEN = os.environ.get("TELEGRAM_TOKEN")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-msg = "📊 SWING SCANNER (FIXED)\n\n"
+msg = "📊 DEBUG SWING SCANNER\n\n"
 
-msg += "🟣 A SETUPS\n"
-msg += "\n".join([f"{t} | {s}" for t,s,p in A[:10]]) or "None"
+msg += "🟣 A\n" + ("\n".join([f"{t} | {s}" for t,s,p in A[:10]]) or "None")
 
-msg += "\n\n🟡 B SETUPS\n"
-msg += "\n".join([f"{t} | {s}" for t,s,p in B[:10]]) or "None"
+msg += "\n\n🟡 B\n" + ("\n".join([f"{t} | {s}" for t,s,p in B[:10]]) or "None")
 
-msg += "\n\n🟢 WATCH\n"
-msg += "\n".join([f"{t} | {s}" for t,s,p in W[:10]]) or "None"
+msg += "\n\n🟢 WATCH\n" + ("\n".join([f"{t} | {s}" for t,s,p in W[:10]]) or "None")
 
-requests.post(
-    f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-    data={"chat_id": CHAT_ID, "text": msg}
-)
+if TOKEN and CHAT_ID:
+    requests.post(
+        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+        data={"chat_id": CHAT_ID, "text": msg}
+    )
 
 print(msg)
