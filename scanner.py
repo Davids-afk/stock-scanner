@@ -1,27 +1,29 @@
 import pandas as pd
 import requests
 
-print("📊 STABLE SCANNER (STOOQ DATA)")
+print("📊 SAFE RUN SCANNER")
 
 # ======================
-# UNIVERSE (simple for stability)
+# UNIVERSE
 # ======================
 
-sp500 = pd.read_html(
-    "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-)[0]["Symbol"].str.lower().tolist()
+try:
+    sp500 = pd.read_html(
+        "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    )[0]["Symbol"].tolist()
+except:
+    sp500 = ["AAPL","MSFT","NVDA","AMZN","GOOGL"]
 
-# stooq uses lowercase tickers with .us suffix
-def to_stooq(ticker):
-    return ticker.lower() + ".us"
+def to_stooq(t):
+    return t.lower() + ".us"
 
 results = []
 
 # ======================
-# SCAN
+# SCAN (SAFE LOOP)
 # ======================
 
-for ticker in sp500[:200]:  # start stable small
+for ticker in sp500[:100]:  # קטן ליציבות
 
     try:
 
@@ -29,17 +31,24 @@ for ticker in sp500[:200]:  # start stable small
 
         url = f"https://stooq.com/q/d/l/?s={symbol}&i=d"
 
-        df = pd.read_csv(url)
+        r = requests.get(url, timeout=10)
+
+        if r.status_code != 200:
+            continue
+
+        from io import StringIO
+
+        df = pd.read_csv(StringIO(r.text))
 
         if df.empty or len(df) < 200:
             continue
 
-        df["Date"] = pd.to_datetime(df["Date"])
         df = df.sort_values("Date")
 
         price = df["Close"].iloc[-1]
 
-        weekly = df.set_index("Date")["Close"].resample("W").last()
+        weekly = df.set_index("Date")["Close"].rolling(5).mean()
+
         ma50w = weekly.rolling(50).mean().iloc[-1]
 
         if pd.isna(ma50w):
@@ -47,21 +56,17 @@ for ticker in sp500[:200]:  # start stable small
 
         if price > ma50w:
 
-            results.append((ticker.upper(), price, ma50w))
+            results.append((ticker, price, ma50w))
 
-    except:
+    except Exception as e:
+        print("skip:", ticker)
         continue
 
 # ======================
 # OUTPUT
 # ======================
 
-msg = "📊 STABLE STOOQ MA50W SCANNER\n\n"
+print("RESULTS:", len(results))
 
-if results:
-    for t, p, m in results[:50]:
-        msg += f"{t} | {p:.2f} > {m:.2f}\n"
-else:
-    msg += "❌ NO DATA OR TOO STRICT"
-
-print(msg)
+for r in results[:20]:
+    print(r)
