@@ -4,7 +4,7 @@ import numpy as np
 import requests
 import os
 
-print("📊 ROBUST MA50 WEEKLY ABOVE SCANNER (FIXED)")
+print("📊 STABLE MA50W SCANNER (REAL FIX)")
 
 # ======================
 # UNIVERSE
@@ -48,28 +48,32 @@ for ticker in WATCHLIST:
 
         df = yf.download(
             ticker,
-            period="5y",   # חשוב! יותר דאטה
+            period="10y",   # חשוב מאוד
             interval="1d",
             progress=False
         )
 
-        if df.empty or len(df) < 200:
+        if df.empty or len(df) < 300:
             continue
 
         df = df.dropna()
 
         # ======================
-        # DAILY CLOSE (REAL PRICE)
+        # DAILY PRICE
         # ======================
         price = df["Close"].iloc[-1]
 
         # ======================
-        # WEEKLY SERIES (FIX)
+        # BUILD TRUE WEEKLY CLOSE SERIES (FIX)
         # ======================
-        weekly = df["Close"].resample("W").last()
+        weekly = df["Close"].groupby(pd.Grouper(freq="W")).last()
 
-        # חשוב: בלי dropna לפני MA
-        ma50w = weekly.rolling(50, min_periods=20).mean().iloc[-1]
+        weekly = weekly.dropna()
+
+        if len(weekly) < 60:
+            continue
+
+        ma50w = weekly.rolling(50).mean().iloc[-1]
 
         if pd.isna(ma50w):
             continue
@@ -95,17 +99,17 @@ results = sorted(results, key=lambda x: (x[1] - x[2]), reverse=True)
 # OUTPUT
 # ======================
 
-msg = "📊 FIXED MA50W ABOVE SCANNER\n\n"
+msg = "📊 STABLE MA50W SCANNER\n\n"
 
 if results:
 
     for t, p, m in results[:50]:
 
-        msg += f"{t} | Close {p:.2f} | MA50W {m:.2f}\n"
+        msg += f"{t} | {p:.2f} > MA50W {m:.2f}\n"
 
 else:
 
-    msg += "❌ STILL EMPTY (DATA ISSUE OR MARKET STATE)"
+    msg += "❌ STILL EMPTY (VERY STRICT OR DATA LIMIT)"
 
 print(msg)
 
