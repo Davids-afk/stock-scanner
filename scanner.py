@@ -1,40 +1,19 @@
-import yfinance as yf
 import pandas as pd
-import numpy as np
 import requests
-import os
 
-print("📊 STABLE MA50W SCANNER (REAL FIX)")
+print("📊 STABLE SCANNER (STOOQ DATA)")
 
 # ======================
-# UNIVERSE
+# UNIVERSE (simple for stability)
 # ======================
 
-def load_universe():
+sp500 = pd.read_html(
+    "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+)[0]["Symbol"].str.lower().tolist()
 
-    try:
-
-        sp = pd.read_html(
-            "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        )[0]["Symbol"].str.replace(".", "-").tolist()
-
-        nq_tables = pd.read_html(
-            "https://en.wikipedia.org/wiki/Nasdaq-100"
-        )
-
-        nq = []
-
-        for t in nq_tables:
-            if "Ticker" in t.columns:
-                nq = t["Ticker"].str.replace(".", "-").tolist()
-
-        return list(set(sp + nq))
-
-    except:
-
-        return ["AAPL","MSFT","NVDA","AMZN","GOOGL","AMD","AVGO"]
-
-WATCHLIST = load_universe()
+# stooq uses lowercase tickers with .us suffix
+def to_stooq(ticker):
+    return ticker.lower() + ".us"
 
 results = []
 
@@ -42,89 +21,47 @@ results = []
 # SCAN
 # ======================
 
-for ticker in WATCHLIST:
+for ticker in sp500[:200]:  # start stable small
 
     try:
 
-        df = yf.download(
-            ticker,
-            period="10y",   # חשוב מאוד
-            interval="1d",
-            progress=False
-        )
+        symbol = to_stooq(ticker)
 
-        if df.empty or len(df) < 300:
+        url = f"https://stooq.com/q/d/l/?s={symbol}&i=d"
+
+        df = pd.read_csv(url)
+
+        if df.empty or len(df) < 200:
             continue
 
-        df = df.dropna()
+        df["Date"] = pd.to_datetime(df["Date"])
+        df = df.sort_values("Date")
 
-        # ======================
-        # DAILY PRICE
-        # ======================
         price = df["Close"].iloc[-1]
 
-        # ======================
-        # BUILD TRUE WEEKLY CLOSE SERIES (FIX)
-        # ======================
-        weekly = df["Close"].groupby(pd.Grouper(freq="W")).last()
-
-        weekly = weekly.dropna()
-
-        if len(weekly) < 60:
-            continue
-
+        weekly = df.set_index("Date")["Close"].resample("W").last()
         ma50w = weekly.rolling(50).mean().iloc[-1]
 
         if pd.isna(ma50w):
             continue
 
-        # ======================
-        # CONDITION
-        # ======================
-
         if price > ma50w:
 
-            results.append((ticker, price, ma50w))
+            results.append((ticker.upper(), price, ma50w))
 
     except:
         continue
 
 # ======================
-# SORT
-# ======================
-
-results = sorted(results, key=lambda x: (x[1] - x[2]), reverse=True)
-
-# ======================
 # OUTPUT
 # ======================
 
-msg = "📊 STABLE MA50W SCANNER\n\n"
+msg = "📊 STABLE STOOQ MA50W SCANNER\n\n"
 
 if results:
-
     for t, p, m in results[:50]:
-
-        msg += f"{t} | {p:.2f} > MA50W {m:.2f}\n"
-
+        msg += f"{t} | {p:.2f} > {m:.2f}\n"
 else:
-
-    msg += "❌ STILL EMPTY (VERY STRICT OR DATA LIMIT)"
+    msg += "❌ NO DATA OR TOO STRICT"
 
 print(msg)
-
-# ======================
-# TELEGRAM
-# ======================
-
-TOKEN = os.environ.get("TELEGRAM_TOKEN")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-
-if TOKEN and CHAT_ID:
-
-    requests.post(
-        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-        data={"chat_id": CHAT_ID, "text": msg}
-    )
-
-print("DONE")
