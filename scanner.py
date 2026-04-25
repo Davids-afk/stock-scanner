@@ -7,18 +7,12 @@ import os
 print("START SCANNER")
 
 # ======================
-# SYMBOLS
+# TEST SYMBOLS (יציבים)
 # ======================
 
 SYMBOLS = [
 "AAPL","MSFT","NVDA","AMZN","GOOGL",
-"META","TSLA","AMD","AVGO","NFLX",
-"ADBE","INTC","QCOM","CRM","ORCL",
-"MU","SMCI","PANW","NOW","LRCX",
-"KLAC","ASML","CDNS","SNPS",
-"COST","HD","LOW","WMT","TGT",
-"BA","CAT","GE","RTX",
-"JPM","GS","MS"
+"META","TSLA","AMD","AVGO","NFLX"
 ]
 
 print("TOTAL SYMBOLS:", len(SYMBOLS))
@@ -39,44 +33,43 @@ def rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # ======================
-# SCORE
+# SCORE FUNCTION
 # ======================
 
 def score_stock(df):
+
+    df = df.copy()
 
     df["EMA8"] = df["Close"].ewm(span=8).mean()
     df["EMA21"] = df["Close"].ewm(span=21).mean()
     df["MA50"] = df["Close"].rolling(50).mean()
 
     df["RSI"] = rsi(df["Close"])
-    df["VOL_AVG"] = df["Volume"].rolling(20).mean()
+
+    # חשוב מאוד — ניקוי NaN
+    df = df.dropna()
+
+    if len(df) < 60:
+        return None
 
     last = df.iloc[-1]
 
     score = 0
 
-    # Trend
+    # תנאי מגמה
     if last["Close"] > last["EMA21"]:
-        score += 25
+        score += 30
 
     if last["EMA8"] > last["EMA21"]:
-        score += 25
+        score += 30
 
-    # RSI wider
-    if 35 <= last["RSI"] <= 75:
-        score += 15
-
-    # Distance
-    dist = abs(
-        last["Close"] - last["EMA21"]
-    ) / last["EMA21"]
-
-    if dist < 0.12:
+    # RSI רחב
+    if 30 <= last["RSI"] <= 75:
         score += 20
 
-    # Volume softer
-    if last["Volume"] > last["VOL_AVG"] * 0.8:
-        score += 15
+    # מעל MA50
+    if last["Close"] > last["MA50"]:
+        score += 20
 
     return score
 
@@ -86,13 +79,16 @@ def score_stock(df):
 
 def classify(score):
 
-    if score >= 75:
+    if score is None:
+        return None
+
+    if score >= 70:
         return "A"
 
-    elif score >= 60:
+    elif score >= 50:
         return "B"
 
-    elif score >= 50:
+    elif score >= 40:
         return "WATCH"
 
     return None
@@ -121,16 +117,18 @@ for ticker in SYMBOLS:
         if df.empty:
             continue
 
-        if len(df) < 60:
-            continue
-
         score = score_stock(df)
 
         level = classify(score)
 
+        if level is None:
+            continue
+
         price = float(
             df["Close"].iloc[-1]
         )
+
+        print(ticker, "score:", score)
 
         if level == "A":
             A.append((ticker, score, price))
@@ -141,7 +139,9 @@ for ticker in SYMBOLS:
         elif level == "WATCH":
             WATCH.append((ticker, score, price))
 
-    except:
+    except Exception as e:
+
+        print("ERROR:", ticker, e)
 
         continue
 
@@ -152,21 +152,21 @@ for ticker in SYMBOLS:
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-msg = "📊 WORKING SWING SCANNER\n\n"
+msg = "📊 VERIFIED SCANNER\n\n"
 
 msg += "🟣 A SETUPS\n"
 msg += "\n".join(
-    [f"{t} | {s} | {p:.2f}" for t,s,p in A[:10]]
+    [f"{t} | {s} | {p:.2f}" for t,s,p in A]
 ) or "None"
 
 msg += "\n\n🟡 B SETUPS\n"
 msg += "\n".join(
-    [f"{t} | {s} | {p:.2f}" for t,s,p in B[:10]]
+    [f"{t} | {s} | {p:.2f}" for t,s,p in B]
 ) or "None"
 
 msg += "\n\n🟢 WATCH\n"
 msg += "\n".join(
-    [f"{t} | {s} | {p:.2f}" for t,s,p in WATCH[:10]]
+    [f"{t} | {s} | {p:.2f}" for t,s,p in WATCH]
 ) or "None"
 
 print(msg)
