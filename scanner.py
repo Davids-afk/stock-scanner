@@ -4,104 +4,86 @@ import numpy as np
 import requests
 import os
 
-print("START SCANNER")
+print("START FULL MARKET TEST")
 
 # ======================
-# TEST SYMBOLS (יציבים)
+# LOAD S&P500
 # ======================
 
-SYMBOLS = [
-"AAPL","MSFT","NVDA","AMZN","GOOGL",
-"META","TSLA","AMD","AVGO","NFLX"
-]
+def load_sp500():
 
-print("TOTAL SYMBOLS:", len(SYMBOLS))
+    try:
 
-# ======================
-# RSI
-# ======================
+        table = pd.read_html(
+            "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+        )[0]
 
-def rsi(series, period=14):
+        symbols = table["Symbol"].tolist()
 
-    delta = series.diff()
+        symbols = [s.replace(".", "-") for s in symbols]
 
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = (-delta.clip(upper=0)).rolling(period).mean()
+        print("SP500 loaded:", len(symbols))
 
-    rs = gain / loss
+        return symbols
 
-    return 100 - (100 / (1 + rs))
+    except:
 
-# ======================
-# SCORE FUNCTION
-# ======================
+        print("SP500 load failed")
 
-def score_stock(df):
+        return []
 
-    df = df.copy()
-
-    df["EMA8"] = df["Close"].ewm(span=8).mean()
-    df["EMA21"] = df["Close"].ewm(span=21).mean()
-    df["MA50"] = df["Close"].rolling(50).mean()
-
-    df["RSI"] = rsi(df["Close"])
-
-    # חשוב מאוד — ניקוי NaN
-    df = df.dropna()
-
-    if len(df) < 60:
-        return None
-
-    last = df.iloc[-1]
-
-    score = 0
-
-    # תנאי מגמה
-    if last["Close"] > last["EMA21"]:
-        score += 30
-
-    if last["EMA8"] > last["EMA21"]:
-        score += 30
-
-    # RSI רחב
-    if 30 <= last["RSI"] <= 75:
-        score += 20
-
-    # מעל MA50
-    if last["Close"] > last["MA50"]:
-        score += 20
-
-    return score
 
 # ======================
-# CLASSIFY
+# LOAD NASDAQ100
 # ======================
 
-def classify(score):
+def load_nasdaq100():
 
-    if score is None:
-        return None
+    try:
 
-    if score >= 70:
-        return "A"
+        tables = pd.read_html(
+            "https://en.wikipedia.org/wiki/Nasdaq-100"
+        )
 
-    elif score >= 50:
-        return "B"
+        for t in tables:
 
-    elif score >= 40:
-        return "WATCH"
+            if "Ticker" in t.columns:
 
-    return None
+                symbols = t["Ticker"].tolist()
+
+                symbols = [s.replace(".", "-") for s in symbols]
+
+                print("NASDAQ100 loaded:", len(symbols))
+
+                return symbols
+
+    except:
+
+        print("NASDAQ load failed")
+
+        return []
+
+
+SP500 = load_sp500()
+NASDAQ100 = load_nasdaq100()
+
+WATCHLIST = list(set(SP500 + NASDAQ100))
+
+print("TOTAL SYMBOLS:", len(WATCHLIST))
 
 # ======================
-# MAIN
+# PARAMETERS
 # ======================
 
-A = []
-B = []
-WATCH = []
+MIN_VOLUME = 1_000_000
 
-for ticker in SYMBOLS:
+results = []
+
+# ======================
+# SCAN
+# ======================
+
+for ticker in WATCHLIST[:300]:
 
     try:
 
@@ -109,7 +91,7 @@ for ticker in SYMBOLS:
 
         df = yf.download(
             ticker,
-            period="1y",
+            period="3y",
             interval="1d",
             progress=False
         )
@@ -117,33 +99,57 @@ for ticker in SYMBOLS:
         if df.empty:
             continue
 
-        score = score_stock(df)
+        # Volume filter
+        df["VOL_AVG"] = df["Volume"].rolling(20).mean()
 
-        level = classify(score)
+        df = df.dropna()
 
-        if level is None:
+        if df.empty:
             continue
 
-        price = float(
-            df["Close"].iloc[-1]
-        )
+        last_vol = df["VOL_AVG"].iloc[-1]
 
-        print(ticker, "score:", score)
+        if last_vol < MIN_VOLUME:
+            continue
 
-        if level == "A":
-            A.append((ticker, score, price))
+        # Weekly conversion
+        weekly = df.resample("W").last()
 
-        elif level == "B":
-            B.append((ticker, score, price))
+        weekly["MA50W"] = weekly["Close"].rolling(50).mean()
 
-        elif level == "WATCH":
-            WATCH.append((ticker, score, price))
+        weekly = weekly.dropna()
+
+        if weekly.empty:
+            continue
+
+        last = weekly.iloc[-1]
+
+        price = last["Close"]
+        ma50w = last["MA50W"]
+
+        distance = (price - ma50w) / ma50w * 100
+
+        # Distance condition
+        if 0 <= distance <= 15:
+
+            results.append(
+                (ticker, price, ma50w, distance)
+            )
 
     except Exception as e:
 
-        print("ERROR:", ticker, e)
+        print("ERROR:", ticker)
 
         continue
+
+# ======================
+# SORT
+# ======================
+
+results = sorted(
+    results,
+    key=lambda x: x[3]
+)
 
 # ======================
 # TELEGRAM
@@ -152,22 +158,22 @@ for ticker in SYMBOLS:
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-msg = "📊 VERIFIED SCANNER\n\n"
+msg = "📊 MA50 WEEKLY + VOLUME SCANNER\n\n"
 
-msg += "🟣 A SETUPS\n"
-msg += "\n".join(
-    [f"{t} | {s} | {p:.2f}" for t,s,p in A]
-) or "None"
+if results:
 
-msg += "\n\n🟡 B SETUPS\n"
-msg += "\n".join(
-    [f"{t} | {s} | {p:.2f}" for t,s,p in B]
-) or "None"
+    for t, p, m, d in results[:30]:
 
-msg += "\n\n🟢 WATCH\n"
-msg += "\n".join(
-    [f"{t} | {s} | {p:.2f}" for t,s,p in WATCH]
-) or "None"
+        msg += (
+            f"{t}\n"
+            f"Price {p:.2f}\n"
+            f"MA50W {m:.2f}\n"
+            f"Dist {d:.1f}%\n\n"
+        )
+
+else:
+
+    msg += "❌ NO STOCKS FOUND"
 
 print(msg)
 
