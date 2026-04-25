@@ -1,10 +1,9 @@
 import yfinance as yf
 import pandas as pd
-import numpy as np
 import requests
 import os
 
-print("📊 REALISTIC MA50 WEEKLY ZONE SCANNER")
+print("📊 SIMPLE MA50W ABOVE SCANNER")
 
 # ======================
 # UNIVERSE
@@ -36,9 +35,13 @@ def load_universe():
 
 WATCHLIST = load_universe()
 
-A_zone = []
-B_zone = []
-C_zone = []
+print("TOTAL STOCKS:", len(WATCHLIST))
+
+# ======================
+# RESULT
+# ======================
+
+results = []
 
 # ======================
 # SCAN
@@ -58,58 +61,60 @@ for ticker in WATCHLIST:
         if df.empty or len(df) < 200:
             continue
 
+        df.index = pd.to_datetime(df.index)
+
+        # daily close (latest)
+        price = df["Close"].iloc[-1]
+
+        # weekly MA50
         weekly = df.resample("W").last()
         weekly["MA50W"] = weekly["Close"].rolling(50).mean()
+
         weekly = weekly.dropna()
 
         if weekly.empty:
             continue
 
-        price = df["Close"].iloc[-1]
         ma50w = weekly["MA50W"].iloc[-1]
 
-        ratio = price / ma50w
-
         # ======================
-        # ZONES
+        # ONLY CONDITION
         # ======================
 
-        if ratio >= 1.0:
-            A_zone.append((ticker, price, ma50w, ratio))
+        if price > ma50w:
 
-        elif 0.85 <= ratio < 1.0:
-            B_zone.append((ticker, price, ma50w, ratio))
-
-        elif 0.75 <= ratio < 0.85:
-            C_zone.append((ticker, price, ma50w, ratio))
+            results.append((ticker, price, ma50w))
 
     except:
         continue
 
 # ======================
-# SORT
+# SORT (distance above MA50W)
 # ======================
 
-A_zone = sorted(A_zone, key=lambda x: x[3], reverse=True)
-B_zone = sorted(B_zone, key=lambda x: x[3])
-C_zone = sorted(C_zone, key=lambda x: x[3])
+results = sorted(results, key=lambda x: (x[1] - x[2]), reverse=True)
 
 # ======================
 # OUTPUT
 # ======================
 
-msg = "📊 MA50 WEEKLY ZONE SCANNER\n\n"
+msg = "📊 MA50 WEEKLY SIMPLE ABOVE SCANNER\n\n"
 
-msg += "🟢 A ZONE (trend strong)\n"
-msg += "\n".join([f"{t} | {p:.2f}" for t,p,_,_ in A_zone[:20]]) or "None"
+if results:
 
-msg += "\n\n🟡 B ZONE (pullback)\n"
-msg += "\n".join([f"{t} | {p:.2f}" for t,p,_,_ in B_zone[:20]]) or "None"
+    for t, p, m in results[:50]:
 
-msg += "\n\n🔵 C ZONE (early setup)\n"
-msg += "\n".join([f"{t} | {p:.2f}" for t,p,_,_ in C_zone[:20]]) or "None"
+        msg += f"{t} | Close {p:.2f} | MA50W {m:.2f}\n"
+
+else:
+
+    msg += "❌ NO STOCKS FOUND"
 
 print(msg)
+
+# ======================
+# TELEGRAM
+# ======================
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
