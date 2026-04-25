@@ -4,7 +4,7 @@ import numpy as np
 import requests
 import os
 
-print("📊 FIXED TWO LAYER SCANNER")
+print("📊 ROBUST TWO LAYER SWING SCANNER")
 
 # ======================
 # UNIVERSE
@@ -14,23 +14,21 @@ def load_universe():
 
     try:
 
-        sp500 = pd.read_html(
+        sp = pd.read_html(
             "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
         )[0]["Symbol"].str.replace(".", "-").tolist()
 
-        nasdaq = pd.read_html(
+        nq = pd.read_html(
             "https://en.wikipedia.org/wiki/Nasdaq-100"
         )
 
-        nasdaq_list = []
+        nq_list = []
 
-        for t in nasdaq:
-
+        for t in nq:
             if "Ticker" in t.columns:
+                nq_list = t["Ticker"].str.replace(".", "-").tolist()
 
-                nasdaq_list = t["Ticker"].str.replace(".", "-").tolist()
-
-        return list(set(sp500 + nasdaq_list))
+        return list(set(sp + nq_list))
 
     except:
 
@@ -41,26 +39,24 @@ WATCHLIST = load_universe()
 print("TOTAL:", len(WATCHLIST))
 
 # ======================
-# SCORING HELP
+# RSI
 # ======================
 
 def rsi(series, period=14):
-
     delta = series.diff()
     gain = delta.clip(lower=0).rolling(period).mean()
     loss = (-delta.clip(upper=0)).rolling(period).mean()
-
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
 # ======================
-# LAYERS
+# SCANNER
 # ======================
 
 BASE = []
 HEDGE = []
 
-for ticker in WATCHLIST[:300]:
+for ticker in WATCHLIST:
 
     try:
 
@@ -71,13 +67,10 @@ for ticker in WATCHLIST[:300]:
             progress=False
         )
 
-        if df.empty:
+        if df.empty or len(df) < 100:
             continue
 
         df = df.dropna()
-
-        if len(df) < 60:
-            continue
 
         # indicators
         df["EMA8"] = df["Close"].ewm(span=8).mean()
@@ -88,46 +81,49 @@ for ticker in WATCHLIST[:300]:
 
         df = df.dropna()
 
-        last = df.iloc[-1]
+        if len(df) < 60:
+            continue
 
-        price = last["Close"]
-        ma50 = last["MA50"]
+        recent = df.tail(5)
+
+        ma50 = df["MA50"].iloc[-1]
 
         if pd.isna(ma50):
             continue
 
-        dist = (price - ma50) / ma50 * 100
-
         # ======================
-        # 🟢 BASE (FIXED)
+        # 🟢 BASE (5-day logic)
         # ======================
 
-        volume_ok = last["Volume"] > 800_000
+        base_hits = 0
 
-        if (
-            price > ma50
-            and dist <= 20
-            and volume_ok
-        ):
-            BASE.append((ticker, price, dist))
+        for i in range(len(recent)):
+
+            price = recent["Close"].iloc[i]
+
+            dist = (price - ma50) / ma50 * 100
+
+            if price > ma50 and dist <= 20:
+                base_hits += 1
+
+        if base_hits >= 2:
+            BASE.append((ticker, df["Close"].iloc[-1], base_hits))
 
         # ======================
-        # 🔵 HEDGE
+        # 🔵 HEDGE (trend consistency)
         # ======================
 
-        trend = last["EMA8"] > last["EMA21"]
+        ema_hits = 0
 
-        rsi_ok = 45 <= last["RSI"] <= 70
+        for i in range(len(recent)):
 
-        pullback = (price / df["Close"].max()) > 0.88
+            if recent["EMA8"].iloc[i] > recent["EMA21"].iloc[i]:
+                ema_hits += 1
 
-        if (
-            trend
-            and price > ma50
-            and rsi_ok
-            and volume_ok
-        ):
-            HEDGE.append((ticker, price, dist))
+        rsi_ok = 45 <= df["RSI"].iloc[-1] <= 70
+
+        if ema_hits >= 3 and rsi_ok:
+            HEDGE.append((ticker, df["Close"].iloc[-1], ema_hits))
 
     except:
         continue
@@ -136,23 +132,23 @@ for ticker in WATCHLIST[:300]:
 # SORT
 # ======================
 
-BASE = sorted(BASE, key=lambda x: x[2])
-HEDGE = sorted(HEDGE, key=lambda x: x[2])
+BASE = sorted(BASE, key=lambda x: x[2], reverse=True)
+HEDGE = sorted(HEDGE, key=lambda x: x[2], reverse=True)
 
 # ======================
 # OUTPUT
 # ======================
 
-msg = "📊 FIXED TWO LAYER SCANNER\n\n"
+msg = "📊 ROBUST TWO LAYER SCANNER\n\n"
 
 msg += "🟢 BASE SETUPS\n"
 msg += "\n".join(
-    [f"{t} | {p:.2f} | {d:.1f}%" for t,p,d in BASE[:20]]
+    [f"{t} | {p:.2f}" for t,p,_ in BASE[:20]]
 ) or "None"
 
 msg += "\n\n🔵 HEDGE SETUPS\n"
 msg += "\n".join(
-    [f"{t} | {p:.2f} | {d:.1f}%" for t,p,d in HEDGE[:20]]
+    [f"{t} | {p:.2f}" for t,p,_ in HEDGE[:20]]
 ) or "None"
 
 print(msg)
