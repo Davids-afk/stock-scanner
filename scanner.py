@@ -1,9 +1,10 @@
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import requests
 import os
 
-print("📊 SIMPLE MA50W ABOVE SCANNER")
+print("📊 ROBUST MA50 WEEKLY ABOVE SCANNER (FIXED)")
 
 # ======================
 # UNIVERSE
@@ -35,12 +36,6 @@ def load_universe():
 
 WATCHLIST = load_universe()
 
-print("TOTAL STOCKS:", len(WATCHLIST))
-
-# ======================
-# RESULT
-# ======================
-
 results = []
 
 # ======================
@@ -53,7 +48,7 @@ for ticker in WATCHLIST:
 
         df = yf.download(
             ticker,
-            period="3y",
+            period="5y",   # חשוב! יותר דאטה
             interval="1d",
             progress=False
         )
@@ -61,24 +56,26 @@ for ticker in WATCHLIST:
         if df.empty or len(df) < 200:
             continue
 
-        df.index = pd.to_datetime(df.index)
-
-        # daily close (latest)
-        price = df["Close"].iloc[-1]
-
-        # weekly MA50
-        weekly = df.resample("W").last()
-        weekly["MA50W"] = weekly["Close"].rolling(50).mean()
-
-        weekly = weekly.dropna()
-
-        if weekly.empty:
-            continue
-
-        ma50w = weekly["MA50W"].iloc[-1]
+        df = df.dropna()
 
         # ======================
-        # ONLY CONDITION
+        # DAILY CLOSE (REAL PRICE)
+        # ======================
+        price = df["Close"].iloc[-1]
+
+        # ======================
+        # WEEKLY SERIES (FIX)
+        # ======================
+        weekly = df["Close"].resample("W").last()
+
+        # חשוב: בלי dropna לפני MA
+        ma50w = weekly.rolling(50, min_periods=20).mean().iloc[-1]
+
+        if pd.isna(ma50w):
+            continue
+
+        # ======================
+        # CONDITION
         # ======================
 
         if price > ma50w:
@@ -89,7 +86,7 @@ for ticker in WATCHLIST:
         continue
 
 # ======================
-# SORT (distance above MA50W)
+# SORT
 # ======================
 
 results = sorted(results, key=lambda x: (x[1] - x[2]), reverse=True)
@@ -98,7 +95,7 @@ results = sorted(results, key=lambda x: (x[1] - x[2]), reverse=True)
 # OUTPUT
 # ======================
 
-msg = "📊 MA50 WEEKLY SIMPLE ABOVE SCANNER\n\n"
+msg = "📊 FIXED MA50W ABOVE SCANNER\n\n"
 
 if results:
 
@@ -108,7 +105,7 @@ if results:
 
 else:
 
-    msg += "❌ NO STOCKS FOUND"
+    msg += "❌ STILL EMPTY (DATA ISSUE OR MARKET STATE)"
 
 print(msg)
 
