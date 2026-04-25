@@ -4,10 +4,10 @@ import numpy as np
 import requests
 import os
 
-print("📊 MA50 WEEKLY BAND SCANNER")
+print("📊 FIXED MA50 WEEKLY BAND SCANNER")
 
 # ======================
-# UNIVERSE (S&P + NASDAQ)
+# UNIVERSE
 # ======================
 
 def load_universe():
@@ -36,12 +36,6 @@ def load_universe():
 
 WATCHLIST = load_universe()
 
-print("TOTAL STOCKS:", len(WATCHLIST))
-
-# ======================
-# RESULTS
-# ======================
-
 results = []
 
 # ======================
@@ -64,22 +58,21 @@ for ticker in WATCHLIST:
 
         df.index = pd.to_datetime(df.index)
 
+        # 🟢 DAILY PRICE (IMPORTANT FIX)
+        price = df["Close"].iloc[-1]
+
+        # 🟢 WEEKLY MA50
         weekly = df.resample("W").last()
-
         weekly["MA50W"] = weekly["Close"].rolling(50).mean()
-
         weekly = weekly.dropna()
 
         if weekly.empty:
             continue
 
-        last = weekly.iloc[-1]
-
-        price = float(last["Close"])
-        ma50w = float(last["MA50W"])
+        ma50w = weekly["MA50W"].iloc[-1]
 
         # ======================
-        # 🎯 BAND CONDITION
+        # BAND CONDITION
         # ======================
 
         lower = ma50w * 0.90
@@ -95,7 +88,7 @@ for ticker in WATCHLIST:
         continue
 
 # ======================
-# SORT (closest to MA50W first)
+# SORT
 # ======================
 
 results = sorted(results, key=lambda x: abs(x[3]))
@@ -104,28 +97,19 @@ results = sorted(results, key=lambda x: abs(x[3]))
 # OUTPUT
 # ======================
 
-msg = "📊 MA50 WEEKLY ±10% BAND SCANNER\n\n"
+msg = "📊 FIXED MA50 WEEKLY BAND SCANNER\n\n"
 
 if results:
 
     for t, p, m, d in results[:50]:
 
-        msg += (
-            f"{t} | "
-            f"P {p:.2f} | "
-            f"MA50W {m:.2f} | "
-            f"{d:.1f}%\n"
-        )
+        msg += f"{t} | P {p:.2f} | MA50W {m:.2f} | {d:.1f}%\n"
 
 else:
 
     msg += "❌ NO STOCKS FOUND"
 
 print(msg)
-
-# ======================
-# TELEGRAM
-# ======================
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -134,10 +118,7 @@ if TOKEN and CHAT_ID:
 
     requests.post(
         f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-        data={
-            "chat_id": CHAT_ID,
-            "text": msg
-        }
+        data={"chat_id": CHAT_ID, "text": msg}
     )
 
 print("DONE")
