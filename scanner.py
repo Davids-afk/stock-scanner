@@ -3,29 +3,67 @@ import pandas as pd
 import numpy as np
 import requests
 import os
+import traceback
+
+print("START SCANNER")
 
 # ======================
-# SYMBOLS
+# SAFE SYMBOL LOAD
 # ======================
 
 def load_sp500():
-    table = pd.read_html(
-        "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    )[0]
 
-    return table["Symbol"].str.replace(".", "-").tolist()
+    try:
+
+        table = pd.read_html(
+            "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+        )[0]
+
+        symbols = table["Symbol"].tolist()
+
+        symbols = [s.replace(".", "-") for s in symbols]
+
+        print("Loaded SP500:", len(symbols))
+
+        return symbols
+
+    except Exception as e:
+
+        print("SP500 LOAD FAILED")
+
+        return [
+            "AAPL","MSFT","NVDA","AMZN",
+            "GOOGL","META","TSLA",
+            "AMD","NFLX","ADBE"
+        ]
 
 
 def load_nasdaq100():
-    tables = pd.read_html(
-        "https://en.wikipedia.org/wiki/Nasdaq-100"
-    )
 
-    for t in tables:
-        if "Ticker" in t.columns:
-            return t["Ticker"].str.replace(".", "-").tolist()
+    try:
 
-    return []
+        tables = pd.read_html(
+            "https://en.wikipedia.org/wiki/Nasdaq-100"
+        )
+
+        for t in tables:
+
+            if "Ticker" in t.columns:
+
+                symbols = t["Ticker"].tolist()
+
+                symbols = [s.replace(".", "-") for s in symbols]
+
+                print("Loaded NASDAQ100:", len(symbols))
+
+                return symbols
+
+    except Exception as e:
+
+        print("NASDAQ LOAD FAILED")
+
+        return ["AMD","NVDA","AVGO"]
+
 
 WATCHLIST = list(set(load_sp500() + load_nasdaq100()))
 
@@ -40,6 +78,7 @@ def rsi(series, period=14):
     delta = series.diff()
 
     gain = delta.clip(lower=0).rolling(period).mean()
+
     loss = (-delta.clip(upper=0)).rolling(period).mean()
 
     rs = gain / loss
@@ -47,50 +86,54 @@ def rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # ======================
-# SCORE ENGINE
+# SCORE FUNCTION
 # ======================
 
 def score_stock(df):
 
-    df = df.copy()
+    try:
 
-    df["EMA8"] = df["Close"].ewm(span=8).mean()
-    df["EMA21"] = df["Close"].ewm(span=21).mean()
-    df["MA50"] = df["Close"].rolling(50).mean()
+        df["EMA8"] = df["Close"].ewm(span=8).mean()
 
-    df["RSI"] = rsi(df["Close"])
-    df["VOL_AVG"] = df["Volume"].rolling(20).mean()
+        df["EMA21"] = df["Close"].ewm(span=21).mean()
 
-    last = df.iloc[-1]
+        df["MA50"] = df["Close"].rolling(50).mean()
 
-    score = 0
+        df["RSI"] = rsi(df["Close"])
 
-    # מעל EMA21
-    if last["Close"] > last["EMA21"]:
-        score += 20
+        df["VOL_AVG"] = df["Volume"].rolling(20).mean()
 
-    # EMA trend
-    if last["EMA8"] > last["EMA21"]:
-        score += 20
+        last = df.iloc[-1]
 
-    # RSI
-    if 40 <= last["RSI"] <= 70:
-        score += 15
+        score = 0
 
-    # קרוב ל EMA21
-    dist = abs(last["Close"] - last["EMA21"]) / last["EMA21"]
-    if dist < 0.08:
-        score += 20
+        if last["Close"] > last["EMA21"]:
+            score += 20
 
-    # Volume
-    if last["Volume"] > last["VOL_AVG"]:
-        score += 10
+        if last["EMA8"] > last["EMA21"]:
+            score += 20
 
-    # מעל MA50
-    if last["Close"] > last["MA50"]:
-        score += 15
+        if 40 <= last["RSI"] <= 70:
+            score += 15
 
-    return score
+        dist = abs(
+            last["Close"] - last["EMA21"]
+        ) / last["EMA21"]
+
+        if dist < 0.08:
+            score += 20
+
+        if last["Volume"] > last["VOL_AVG"]:
+            score += 10
+
+        if last["Close"] > last["MA50"]:
+            score += 15
+
+        return score
+
+    except:
+
+        return 0
 
 # ======================
 # CLASSIFY
@@ -110,16 +153,18 @@ def classify(score):
     return None
 
 # ======================
-# MAIN
+# MAIN LOOP (SAFE)
 # ======================
 
 A = []
 B = []
 WATCH = []
 
-for ticker in WATCHLIST[:300]:
+for ticker in WATCHLIST[:200]:
 
     try:
+
+        print("Scanning:", ticker)
 
         df = yf.download(
             ticker,
@@ -128,10 +173,8 @@ for ticker in WATCHLIST[:300]:
             progress=False
         )
 
-        if df.empty:
+        if df is None or df.empty:
             continue
-
-        df = df.dropna()
 
         if len(df) < 60:
             continue
@@ -140,7 +183,9 @@ for ticker in WATCHLIST[:300]:
 
         level = classify(score)
 
-        price = float(df["Close"].iloc[-1])
+        price = float(
+            df["Close"].iloc[-1]
+        )
 
         if level == "A":
             A.append((ticker, score, price))
@@ -151,41 +196,58 @@ for ticker in WATCHLIST[:300]:
         elif level == "WATCH":
             WATCH.append((ticker, score, price))
 
-    except:
+    except Exception as e:
+
+        print("ERROR:", ticker)
+
+        print(traceback.format_exc())
+
         continue
 
 # ======================
-# TELEGRAM
+# TELEGRAM SAFE
 # ======================
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
+
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 msg = "📊 REAL SWING SCANNER\n\n"
 
 msg += "🟣 A SETUPS\n"
+
 msg += "\n".join(
     [f"{t} | {s} | {p:.2f}" for t,s,p in A[:10]]
 ) or "None"
 
 msg += "\n\n🟡 B SETUPS\n"
+
 msg += "\n".join(
     [f"{t} | {s} | {p:.2f}" for t,s,p in B[:10]]
 ) or "None"
 
 msg += "\n\n🟢 WATCH\n"
+
 msg += "\n".join(
     [f"{t} | {s} | {p:.2f}" for t,s,p in WATCH[:10]]
 ) or "None"
 
+print(msg)
+
 if TOKEN and CHAT_ID:
 
-    requests.post(
-        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-        data={
-            "chat_id": CHAT_ID,
-            "text": msg
-        }
-    )
+    try:
 
-print(msg)
+        requests.post(
+            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+            data={
+                "chat_id": CHAT_ID,
+                "text": msg
+            }
+        )
+
+    except Exception as e:
+
+        print("Telegram failed")
+
+print("DONE")
