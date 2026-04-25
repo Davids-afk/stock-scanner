@@ -65,17 +65,15 @@ def rsi(series, period=14):
 
 # ======================
 # STRATEGY 1
-# TREND PULLBACK
+# PULLBACK SWING
 # ======================
 
 def strategy_pullback(df):
 
     try:
 
-        monthly = df.resample("M").last()
         weekly = df.resample("W").last()
 
-        monthly["MA10"] = monthly["Close"].rolling(10).mean()
         weekly["MA50"] = weekly["Close"].rolling(50).mean()
 
         df["MA20"] = df["Close"].rolling(20).mean()
@@ -83,24 +81,35 @@ def strategy_pullback(df):
 
         df["RSI"] = rsi(df["Close"])
 
-        if len(monthly) < 12:
-            return None
-
-        last_m = monthly.iloc[-1]
         last_w = weekly.iloc[-1]
         last = df.iloc[-1]
 
+        if np.isnan(last_w["MA50"]):
+            return None
+
+        near_ma20 = (
+            abs(last["Close"] - last["MA20"])
+            / last["MA20"] < 0.05
+        )
+
+        rsi_ok = 35 <= last["RSI"] <= 60
+
+        weekly_trend = (
+            last_w["Close"] > last_w["MA50"]
+        )
+
         cond = (
-            last_m["Close"] > last_m["MA10"]
-            and last_w["Close"] > last_w["MA50"]
-            and abs(last["Close"] - last["MA20"]) / last["MA20"] < 0.03
-            and 40 <= last["RSI"] <= 55
+            near_ma20
+            and rsi_ok
+            and weekly_trend
         )
 
         if cond:
 
             entry = last["Close"]
+
             stop = last["MA50"]
+
             target = entry * 1.10
 
             return entry, stop, target
@@ -122,19 +131,31 @@ def strategy_breakout(df):
 
         df["VOL_AVG"] = df["Volume"].rolling(20).mean()
 
-        high20 = df["High"].rolling(20).max().iloc[-2]
+        high20 = (
+            df["High"]
+            .rolling(20)
+            .max()
+            .iloc[-2]
+        )
 
         last = df.iloc[-1]
 
+        vol_ok = (
+            last["Volume"]
+            > last["VOL_AVG"] * 1.1
+        )
+
         cond = (
             last["Close"] > high20
-            and last["Volume"] > last["VOL_AVG"]
+            and vol_ok
         )
 
         if cond:
 
             entry = high20 * 1.002
+
             stop = high20 * 0.98
+
             target = entry * 1.12
 
             return entry, stop, target
@@ -163,13 +184,15 @@ def strategy_momentum(df):
 
         cond = (
             last["EMA8"] > last["EMA21"]
-            and 50 <= last["RSI"] <= 70
+            and 45 <= last["RSI"] <= 70
         )
 
         if cond:
 
             entry = last["Close"]
+
             stop = last["EMA21"]
+
             target = entry * 1.10
 
             return entry, stop, target
@@ -199,9 +222,9 @@ def create_chart(df, ticker, entry, stop, target):
         plt.plot(df["MA20"], label="MA20")
         plt.plot(df["MA50"], label="MA50")
 
-        plt.axhline(entry, linestyle="--", label="Entry")
-        plt.axhline(stop, linestyle="--", label="Stop")
-        plt.axhline(target, linestyle="--", label="Target")
+        plt.axhline(entry, linestyle="--")
+        plt.axhline(stop, linestyle="--")
+        plt.axhline(target, linestyle="--")
 
         plt.title(ticker)
 
@@ -229,7 +252,7 @@ momentum_list = []
 
 charts = []
 
-for ticker in WATCHLIST[:200]:
+for ticker in WATCHLIST[:400]:
 
     print("Scanning:", ticker)
 
@@ -254,16 +277,28 @@ for ticker in WATCHLIST[:200]:
         result = None
 
         if res1:
+
+            pullback_list.append(
+                (ticker, *res1)
+            )
+
             result = res1
-            pullback_list.append((ticker, *res1))
 
         elif res2:
+
+            breakout_list.append(
+                (ticker, *res2)
+            )
+
             result = res2
-            breakout_list.append((ticker, *res2))
 
         elif res3:
+
+            momentum_list.append(
+                (ticker, *res3)
+            )
+
             result = res3
-            momentum_list.append((ticker, *res3))
 
         if result:
 
@@ -288,13 +323,13 @@ for ticker in WATCHLIST[:200]:
 
 
 # ======================
-# TELEGRAM TEXT
+# TELEGRAM
 # ======================
 
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-msg = "📊 MULTI STRATEGY SCANNER\n\n"
+msg = "📊 SWING SCANNER\n\n"
 
 def format_block(title, lst):
 
