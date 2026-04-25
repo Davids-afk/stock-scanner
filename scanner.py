@@ -1,12 +1,13 @@
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import requests
 import os
 
-print("📊 SIMPLE MA50 WEEKLY SCANNER")
+print("📊 MA50 WEEKLY BAND SCANNER")
 
 # ======================
-# UNIVERSE
+# UNIVERSE (S&P + NASDAQ)
 # ======================
 
 def load_universe():
@@ -17,17 +18,17 @@ def load_universe():
             "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
         )[0]["Symbol"].str.replace(".", "-").tolist()
 
-        nq = pd.read_html(
+        nq_tables = pd.read_html(
             "https://en.wikipedia.org/wiki/Nasdaq-100"
         )
 
-        nq_list = []
+        nq = []
 
-        for t in nq:
+        for t in nq_tables:
             if "Ticker" in t.columns:
-                nq_list = t["Ticker"].str.replace(".", "-").tolist()
+                nq = t["Ticker"].str.replace(".", "-").tolist()
 
-        return list(set(sp + nq_list))
+        return list(set(sp + nq))
 
     except:
 
@@ -38,7 +39,7 @@ WATCHLIST = load_universe()
 print("TOTAL STOCKS:", len(WATCHLIST))
 
 # ======================
-# RESULT
+# RESULTS
 # ======================
 
 results = []
@@ -63,7 +64,6 @@ for ticker in WATCHLIST:
 
         df.index = pd.to_datetime(df.index)
 
-        # weekly data
         weekly = df.resample("W").last()
 
         weekly["MA50W"] = weekly["Close"].rolling(50).mean()
@@ -78,35 +78,48 @@ for ticker in WATCHLIST:
         price = float(last["Close"])
         ma50w = float(last["MA50W"])
 
-        # ✅ ONLY CONDITION
-        if price > ma50w:
+        # ======================
+        # 🎯 BAND CONDITION
+        # ======================
 
-            results.append((ticker, price, ma50w))
+        lower = ma50w * 0.90
+        upper = ma50w * 1.10
+
+        if lower <= price <= upper:
+
+            distance = (price - ma50w) / ma50w * 100
+
+            results.append((ticker, price, ma50w, distance))
 
     except:
         continue
 
 # ======================
-# SORT
+# SORT (closest to MA50W first)
 # ======================
 
-results = sorted(results, key=lambda x: (x[1]-x[2]), reverse=True)
+results = sorted(results, key=lambda x: abs(x[3]))
 
 # ======================
 # OUTPUT
 # ======================
 
-msg = "📊 MA50 WEEKLY ABOVE SCANNER\n\n"
+msg = "📊 MA50 WEEKLY ±10% BAND SCANNER\n\n"
 
 if results:
 
-    for t, p, m in results[:50]:
+    for t, p, m, d in results[:50]:
 
-        msg += f"{t} | Price {p:.2f} | MA50W {m:.2f}\n"
+        msg += (
+            f"{t} | "
+            f"P {p:.2f} | "
+            f"MA50W {m:.2f} | "
+            f"{d:.1f}%\n"
+        )
 
 else:
 
-    msg += "❌ NO RESULTS"
+    msg += "❌ NO STOCKS FOUND"
 
 print(msg)
 
