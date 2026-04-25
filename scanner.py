@@ -1,73 +1,98 @@
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import requests
 import os
 
-print("START DEBUG MA50W")
+print("📊 TWO LAYER SWING SCANNER START")
 
 # ======================
-# LOAD SYMBOLS
+# SYMBOLS (S&P + NASDAQ)
 # ======================
 
 def load_sp500():
-
     try:
-
         table = pd.read_html(
             "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
         )[0]
-
-        symbols = table["Symbol"].tolist()
-
-        symbols = [s.replace(".", "-") for s in symbols]
-
-        return symbols
-
+        return table["Symbol"].str.replace(".", "-").tolist()
     except:
-
-        return ["AAPL","MSFT","NVDA"]
-
+        return ["AAPL","MSFT","NVDA","AMZN","GOOGL"]
 
 def load_nasdaq100():
-
     try:
-
         tables = pd.read_html(
             "https://en.wikipedia.org/wiki/Nasdaq-100"
         )
-
         for t in tables:
-
             if "Ticker" in t.columns:
-
-                symbols = t["Ticker"].tolist()
-
-                symbols = [s.replace(".", "-") for s in symbols]
-
-                return symbols
-
+                return t["Ticker"].str.replace(".", "-").tolist()
     except:
+        return ["AMD","AVGO","NFLX"]
 
-        return ["AMD","AVGO"]
+WATCHLIST = list(set(load_sp500() + load_nasdaq100()))
 
-SP500 = load_sp500()
-NASDAQ100 = load_nasdaq100()
-
-WATCHLIST = list(set(SP500 + NASDAQ100))
-
-print("TOTAL SYMBOLS:", len(WATCHLIST))
-
-results = []
+print("TOTAL STOCKS:", len(WATCHLIST))
 
 # ======================
-# DEBUG LOOP
+# RSI
 # ======================
 
-for ticker in WATCHLIST[:50]:
+def rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.clip(lower=0).rolling(period).mean()
+    loss = (-delta.clip(upper=0)).rolling(period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+# ======================
+# DATA PROCESS
+# ======================
+
+def process(df):
+
+    df = df.copy()
+
+    df["EMA8"] = df["Close"].ewm(span=8).mean()
+    df["EMA21"] = df["Close"].ewm(span=21).mean()
+    df["MA50"] = df["Close"].rolling(50).mean()
+    df["RSI"] = rsi(df["Close"])
+    df["VOL_AVG"] = df["Volume"].rolling(20).mean()
+
+    df = df.dropna()
+
+    if len(df) < 60:
+        return None
+
+    last = df.iloc[-1]
+
+    # weekly MA50
+    weekly = df.resample("W").last()
+    weekly["MA50W"] = weekly["Close"].rolling(50).mean()
+    weekly = weekly.dropna()
+
+    if weekly.empty:
+        return None
+
+    w = weekly.iloc[-1]
+
+    price = last["Close"]
+    ma50w = w["MA50W"]
+
+    dist = (price - ma50w) / ma50w * 100
+
+    return last, price, ma50w, dist, df
+
+# ======================
+# LAYERS
+# ======================
+
+BASE = []
+HEDGE = []
+
+for ticker in WATCHLIST:
 
     try:
-
-        print("Downloading:", ticker)
 
         df = yf.download(
             ticker,
@@ -79,48 +104,71 @@ for ticker in WATCHLIST[:50]:
         if df.empty:
             continue
 
-        # 🔴 קריטי מאוד
-        df.index = pd.to_datetime(df.index)
+        out = process(df)
 
-        # Weekly resample
-        weekly = df.resample("W").last()
-
-        weekly["MA50W"] = (
-            weekly["Close"]
-            .rolling(50)
-            .mean()
-        )
-
-        weekly = weekly.dropna()
-
-        if weekly.empty:
+        if out is None:
             continue
 
-        last = weekly.iloc[-1]
+        last, price, ma50w, dist, df = out
 
-        price = float(last["Close"])
-        ma50w = float(last["MA50W"])
+        volume_ok = last["Volume"] > last["VOL_AVG"]
 
-        distance = (
-            (price - ma50w) / ma50w * 100
-        )
+        # ======================
+        # 🟢 BASE LAYER
+        # ======================
 
-        print(
-            ticker,
-            "Price:", round(price,2),
-            "MA50W:", round(ma50w,2),
-            "Dist:", round(distance,2)
-        )
+        if (
+            price >= ma50w
+            and dist <= 10
+            and volume_ok
+        ):
+            BASE.append((ticker, price, dist))
 
-        results.append(
-            (ticker, price, ma50w, distance)
-        )
+        # ======================
+        # 🔵 HEDGE FUND LAYER
+        # ======================
 
-    except Exception as e:
+        trend_up = last["EMA8"] > last["EMA21"]
 
-        print("ERROR:", ticker, e)
+        rsi_ok = 45 <= last["RSI"] <= 70
 
+        pullback_ok = (price / df["Close"].max()) > 0.88
+
+        if (
+            trend_up
+            and price >= ma50w
+            and rsi_ok
+            and pullback_ok
+        ):
+            HEDGE.append((ticker, price, dist))
+
+    except:
         continue
+
+# ======================
+# SORT
+# ======================
+
+BASE = sorted(BASE, key=lambda x: x[2])
+HEDGE = sorted(HEDGE, key=lambda x: x[2])
+
+# ======================
+# OUTPUT
+# ======================
+
+msg = "📊 TWO LAYER SWING SCANNER\n\n"
+
+msg += "🟢 BASE (MA50 support)\n"
+msg += "\n".join(
+    [f"{t} | {p:.2f} | {d:.1f}%" for t,p,d in BASE[:20]]
+) or "None"
+
+msg += "\n\n🔵 HEDGE FUND SETUPS\n"
+msg += "\n".join(
+    [f"{t} | {p:.2f} | {d:.1f}%" for t,p,d in HEDGE[:20]]
+) or "None"
+
+print(msg)
 
 # ======================
 # TELEGRAM
@@ -128,25 +176,6 @@ for ticker in WATCHLIST[:50]:
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-
-msg = "📊 DEBUG MA50W VALUES\n\n"
-
-if results:
-
-    for t, p, m, d in results[:20]:
-
-        msg += (
-            f"{t} | "
-            f"P {p:.2f} | "
-            f"MA50W {m:.2f} | "
-            f"{d:.1f}%\n"
-        )
-
-else:
-
-    msg += "❌ NO DATA"
-
-print(msg)
 
 if TOKEN and CHAT_ID:
 
