@@ -48,7 +48,7 @@ WATCHLIST = list(set(SP500 + NASDAQ100))
 print("TOTAL SYMBOLS:", len(WATCHLIST))
 
 # ======================
-# INDICATORS
+# RSI
 # ======================
 
 def rsi(series, period=14):
@@ -64,47 +64,107 @@ def rsi(series, period=14):
 
 
 # ======================
-# STRATEGY 1
-# PULLBACK SWING
+# WEEKLY MA50 FIXED
 # ======================
 
-def strategy_pullback(df):
+def weekly_ma50(df):
 
     try:
 
-        weekly = df.resample("W").last()
+        weekly = yf.download(
+            df.name,
+            period="5y",
+            interval="1wk",
+            progress=False
+        )
 
-        weekly["MA50"] = weekly["Close"].rolling(50).mean()
+        weekly["MA50W"] = (
+            weekly["Close"]
+            .rolling(50)
+            .mean()
+        )
+
+        last = weekly.iloc[-1]
+
+        if np.isnan(last["MA50W"]):
+            return False
+
+        return last["Close"] > last["MA50W"]
+
+    except:
+
+        return False
+
+
+# ======================
+# ANALYZE
+# ======================
+
+def analyze(df, ticker):
+
+    try:
 
         df["MA20"] = df["Close"].rolling(20).mean()
         df["MA50"] = df["Close"].rolling(50).mean()
 
+        df["EMA8"] = df["Close"].ewm(span=8).mean()
+        df["EMA21"] = df["Close"].ewm(span=21).mean()
+
         df["RSI"] = rsi(df["Close"])
 
-        last_w = weekly.iloc[-1]
+        df["VOL_AVG"] = (
+            df["Volume"]
+            .rolling(20)
+            .mean()
+        )
+
         last = df.iloc[-1]
 
-        if np.isnan(last_w["MA50"]):
-            return None
+        # WEEKLY TREND
+
+        weekly_ok = weekly_ma50(df)
+
+        # PULLBACK
 
         near_ma20 = (
             abs(last["Close"] - last["MA20"])
-            / last["MA20"] < 0.05
+            / last["MA20"]
+            < 0.05
         )
 
-        rsi_ok = 35 <= last["RSI"] <= 60
-
-        weekly_trend = (
-            last_w["Close"] > last_w["MA50"]
+        rsi_pullback = (
+            35 <= last["RSI"] <= 60
         )
 
-        cond = (
-            near_ma20
-            and rsi_ok
-            and weekly_trend
+        pullback = (
+            weekly_ok
+            and near_ma20
+            and rsi_pullback
         )
 
-        if cond:
+        # BREAKOUT
+
+        high20 = (
+            df["High"]
+            .rolling(20)
+            .max()
+            .iloc[-2]
+        )
+
+        breakout = (
+            last["Close"] > high20
+            and last["Volume"]
+            > last["VOL_AVG"]
+        )
+
+        # MOMENTUM
+
+        momentum = (
+            last["EMA8"] > last["EMA21"]
+            and last["RSI"] > 50
+        )
+
+        if pullback or breakout or momentum:
 
             entry = last["Close"]
 
@@ -117,89 +177,7 @@ def strategy_pullback(df):
         return None
 
     except:
-        return None
 
-
-# ======================
-# STRATEGY 2
-# BREAKOUT
-# ======================
-
-def strategy_breakout(df):
-
-    try:
-
-        df["VOL_AVG"] = df["Volume"].rolling(20).mean()
-
-        high20 = (
-            df["High"]
-            .rolling(20)
-            .max()
-            .iloc[-2]
-        )
-
-        last = df.iloc[-1]
-
-        vol_ok = (
-            last["Volume"]
-            > last["VOL_AVG"] * 1.1
-        )
-
-        cond = (
-            last["Close"] > high20
-            and vol_ok
-        )
-
-        if cond:
-
-            entry = high20 * 1.002
-
-            stop = high20 * 0.98
-
-            target = entry * 1.12
-
-            return entry, stop, target
-
-        return None
-
-    except:
-        return None
-
-
-# ======================
-# STRATEGY 3
-# MOMENTUM
-# ======================
-
-def strategy_momentum(df):
-
-    try:
-
-        df["EMA8"] = df["Close"].ewm(span=8).mean()
-        df["EMA21"] = df["Close"].ewm(span=21).mean()
-
-        df["RSI"] = rsi(df["Close"])
-
-        last = df.iloc[-1]
-
-        cond = (
-            last["EMA8"] > last["EMA21"]
-            and 45 <= last["RSI"] <= 70
-        )
-
-        if cond:
-
-            entry = last["Close"]
-
-            stop = last["EMA21"]
-
-            target = entry * 1.10
-
-            return entry, stop, target
-
-        return None
-
-    except:
         return None
 
 
@@ -218,17 +196,15 @@ def create_chart(df, ticker, entry, stop, target):
 
         plt.figure(figsize=(9,4))
 
-        plt.plot(df["Close"], label="Price")
-        plt.plot(df["MA20"], label="MA20")
-        plt.plot(df["MA50"], label="MA50")
+        plt.plot(df["Close"])
+        plt.plot(df["MA20"])
+        plt.plot(df["MA50"])
 
-        plt.axhline(entry, linestyle="--")
-        plt.axhline(stop, linestyle="--")
-        plt.axhline(target, linestyle="--")
+        plt.axhline(entry)
+        plt.axhline(stop)
+        plt.axhline(target)
 
         plt.title(ticker)
-
-        plt.legend()
 
         file_name = f"{ticker}.png"
 
@@ -239,20 +215,18 @@ def create_chart(df, ticker, entry, stop, target):
         return file_name
 
     except:
+
         return None
 
 
 # ======================
-# MAIN SCAN
+# MAIN
 # ======================
 
-pullback_list = []
-breakout_list = []
-momentum_list = []
-
+results = []
 charts = []
 
-for ticker in WATCHLIST[:400]:
+for ticker in WATCHLIST[:300]:
 
     print("Scanning:", ticker)
 
@@ -268,41 +242,17 @@ for ticker in WATCHLIST[:400]:
         if df.empty:
             continue
 
-        df.index = pd.to_datetime(df.index)
+        df.name = ticker
 
-        res1 = strategy_pullback(df)
-        res2 = strategy_breakout(df)
-        res3 = strategy_momentum(df)
+        res = analyze(df, ticker)
 
-        result = None
+        if res:
 
-        if res1:
+            entry, stop, target = res
 
-            pullback_list.append(
-                (ticker, *res1)
+            results.append(
+                (ticker, entry, stop, target)
             )
-
-            result = res1
-
-        elif res2:
-
-            breakout_list.append(
-                (ticker, *res2)
-            )
-
-            result = res2
-
-        elif res3:
-
-            momentum_list.append(
-                (ticker, *res3)
-            )
-
-            result = res3
-
-        if result:
-
-            entry, stop, target = result
 
             chart = create_chart(
                 df,
@@ -315,9 +265,7 @@ for ticker in WATCHLIST[:400]:
             if chart:
                 charts.append(chart)
 
-    except Exception as e:
-
-        print("ERROR:", ticker, e)
+    except:
 
         continue
 
@@ -329,31 +277,23 @@ for ticker in WATCHLIST[:400]:
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-msg = "📊 SWING SCANNER\n\n"
+msg = "📊 STABLE SWING SCANNER\n\n"
 
-def format_block(title, lst):
+if len(results) == 0:
 
-    text = title + "\n"
+    msg += "No signals today"
 
-    if len(lst) == 0:
-        text += "None\n\n"
-        return text
+else:
 
-    for t, e, s, tp in lst[:5]:
+    for t, e, s, tp in results[:10]:
 
-        text += (
+        msg += (
             f"{t}\n"
             f"Entry: {e:.2f}\n"
             f"Stop: {s:.2f}\n"
             f"Target: {tp:.2f}\n\n"
         )
 
-    return text
-
-
-msg += format_block("🥇 Pullback", pullback_list)
-msg += format_block("🥈 Breakout", breakout_list)
-msg += format_block("🥉 Momentum", momentum_list)
 
 requests.post(
     f"https://api.telegram.org/bot{TOKEN}/sendMessage",
@@ -362,10 +302,6 @@ requests.post(
         "text": msg
     }
 )
-
-# ======================
-# SEND CHARTS
-# ======================
 
 for chart in charts[:10]:
 
@@ -380,6 +316,7 @@ for chart in charts[:10]:
             )
 
     except:
+
         continue
 
 
